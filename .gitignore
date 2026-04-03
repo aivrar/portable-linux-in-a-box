@@ -1,0 +1,43 @@
+# Build output
+build/
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
+
+# IDE
+.vs/
+.vscode/
+*.suo
+*.user
+*.sln
+*.vcxproj*
+CMakeSettings.json
+
+# OS
+Thumbs.db
+.DS_Store
+
+# WebView2 cache
+cache/
+
+# Generated apps (created by the user, not part of the template)
+app/apps/
+
+# Issue report (dev artifact)
+4-2_app_issues.md
+
+# Old dev screenshots
+Capture.PNG
+Capture2.PNG
+echo_hello.PNG
+create_app.PNG
+create_app_comfy_helper.PNG
+create_app_vllm_helper.PNG
+create_app_vllm_helper_done.PNG
+terminal_view.PNG
+set_up.PNG
+
+# Dev docs
+linux_dev.md

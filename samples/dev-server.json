@@ -1,0 +1,9 @@
+{
+    "name": "Python Dev Server",
+    "distro": "Ubuntu",
+    "deps": "python",
+    "setup": "mkdir -p /opt/app && echo '<h1>Hello from Linux</h1><p>This is a Python HTTP server running inside WSL.</p>' > /opt/app/index.html",
+    "start": "cd /opt/app && python3 -m http.server 8000",
+    "port": 8000,
+    "terminal": true
+}

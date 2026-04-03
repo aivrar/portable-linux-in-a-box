@@ -1,0 +1,10 @@
+{
+    "name": "ComfyUI",
+    "distro": "Ubuntu",
+    "repo": "https://github.com/comfyanonymous/ComfyUI",
+    "deps": "python, git",
+    "setup": "pip install -r requirements.txt",
+    "start": "python3 main.py --port 8188",
+    "port": 8188,
+    "terminal": true
+}
