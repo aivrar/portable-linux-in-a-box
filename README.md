@@ -1,4 +1,4 @@
-# linux-template
+# Portable Linux in a Box
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2011+-lightgrey) ![Platform: Linux](https://img.shields.io/badge/Platform-Linux-orange) ![Language: C](https://img.shields.io/badge/Language-C11-blue)
 
