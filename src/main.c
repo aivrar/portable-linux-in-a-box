@@ -303,31 +303,52 @@ static void push_status(app_json_ctx_t *ctx, const char *text, const char *cls) 
     }
 }
 
-/* Run a command and stream output to the log.
- * Redirects output to a temp file, polls it, and pushes new lines to the GUI. */
+/* Run a command/script and stream output to the log in real-time.
+ *
+ * Writes the script to a temp file, executes it in the background,
+ * and polls the output log for new lines. This avoids shell quoting
+ * issues that occur when embedding complex scripts in sh -c '...'. */
 static int exec_with_log(app_json_ctx_t *ctx, const char *command) {
-    /* Start the command in background, writing to a log file */
-    char cmd[4096];
-    snprintf(cmd, sizeof(cmd),
-        "mkdir -p /tmp/linux_template; rm -f /tmp/linux_template/_app_log.txt; "
-        "sh -c '(%s) > /tmp/linux_template/_app_log.txt 2>&1; echo __DONE:$?__ >> /tmp/linux_template/_app_log.txt' &",
+    /* Step 1: Write the script to a temp file via heredoc.
+     * This avoids all quoting issues — the script can contain
+     * single quotes, double quotes, $variables, anything. */
+    size_t write_len = strlen(command) + 256;
+    char *write_cmd = (char *)malloc(write_len);
+    if (!write_cmd) return -1;
+    snprintf(write_cmd, write_len,
+        "mkdir -p /tmp/linux_template; cat > /tmp/linux_template/_app_script.sh << '__SCRIPT_EOF__'\n"
+        "%s\n"
+        "__SCRIPT_EOF__\n",
         command);
-    linux_error_t exec_rc = ctx->backend->exec(ctx->backend, cmd, NULL, NULL, NULL);
-    if (exec_rc != LINUX_OK) return -1;
 
-    /* Poll the log file for new output */
+    int exit_code = -1;
+    linux_error_t exec_rc = ctx->backend->exec(ctx->backend, write_cmd,
+                                                NULL, NULL, &exit_code);
+    free(write_cmd);
+    if (exec_rc != LINUX_OK || exit_code != 0) return -1;
+
+    /* Step 2: Run the script in the background, output to log file */
+    ctx->backend->exec(ctx->backend,
+        "rm -f /tmp/linux_template/_app_log.txt; "
+        "sh -c 'bash /tmp/linux_template/_app_script.sh "
+            "> /tmp/linux_template/_app_log.txt 2>&1; "
+            "echo __DONE:$?__ >> /tmp/linux_template/_app_log.txt' &",
+        NULL, NULL, NULL);
+
+    /* Step 3: Poll the log file for new output */
     int lines_seen = 0;
     int rc = -1;
     int done = 0;
     unsigned long start_time = COMPAT_TICK_MS();
-    unsigned long timeout = 600000; /* 10 minutes max */
+    unsigned long timeout = 1800000; /* 30 minutes max for large installs */
 
     while (!done && (COMPAT_TICK_MS() - start_time) < timeout) {
-        COMPAT_SLEEP_MS(2000);
+        COMPAT_SLEEP_MS(1500);
 
         char tail_cmd[128];
         snprintf(tail_cmd, sizeof(tail_cmd),
-            "tail -n +%d /tmp/linux_template/_app_log.txt 2>/dev/null", lines_seen + 1);
+            "tail -n +%d /tmp/linux_template/_app_log.txt 2>/dev/null",
+            lines_seen + 1);
 
         char *out = NULL;
         ctx->backend->exec(ctx->backend, tail_cmd, &out, NULL, NULL);
@@ -354,7 +375,11 @@ static int exec_with_log(app_json_ctx_t *ctx, const char *command) {
         free(out);
     }
 
-    if (!done) push_log(ctx, "(timed out after 10 minutes)");
+    /* Cleanup */
+    ctx->backend->exec(ctx->backend,
+        "rm -f /tmp/linux_template/_app_script.sh", NULL, NULL, NULL);
+
+    if (!done) push_log(ctx, "(timed out after 30 minutes)");
     return done ? rc : -1;
 }
 
@@ -367,7 +392,9 @@ static THREAD_FUNC_DECL setup_thread(THREAD_PARAM param) {
      * This avoids multiple blocking exec() calls. */
     growbuf_t script;
     growbuf_init(&script, 4096);
-    growbuf_append(&script, "set -e\n", 7);
+    /* Use set +e so one failed step doesn't abort everything.
+     * Use unbuffered output so pip/curl progress shows in real-time. */
+    growbuf_append(&script, "set +e\nexport PYTHONUNBUFFERED=1\n", 31);
 
     /* Dependencies */
     if (ctx->app->deps[0]) {
@@ -387,7 +414,7 @@ static THREAD_FUNC_DECL setup_thread(THREAD_PARAM param) {
                 n = snprintf(line, sizeof(line),
                     "echo 'Installing: python'\n"
                     "python3 -m pip --version >/dev/null 2>&1 || "
-                    "(curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3 - --user --break-system-packages) 2>&1; "
+                    "(curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3 - --user --break-system-packages --progress-bar on) 2>&1; "
                     "export PATH=$HOME/.local/bin:$PATH\n"
                     "echo 'python: done'\n");
             } else if (strcmp(dep, "node") == 0 || strcmp(dep, "nodejs") == 0) {
@@ -423,6 +450,7 @@ static THREAD_FUNC_DECL setup_thread(THREAD_PARAM param) {
         char line[2048];
         int n = snprintf(line, sizeof(line),
             "echo '=== Cloning repository ==='\n"
+            "sudo -n mkdir -p /opt/app 2>/dev/null; sudo -n chown $(whoami) /opt/app 2>/dev/null; mkdir -p /opt/app 2>/dev/null\n"
             "if [ -d /opt/app/.git ]; then cd /opt/app && git pull 2>&1; "
             "else git clone --depth 1 '%s' /opt/app 2>&1; fi\n"
             "echo 'Clone: done'\n", ctx->app->repo);
@@ -434,7 +462,7 @@ static THREAD_FUNC_DECL setup_thread(THREAD_PARAM param) {
         char line[2048];
         int n = snprintf(line, sizeof(line),
             "echo '=== Running setup ==='\n"
-            "cd /opt/app 2>/dev/null\n"
+            "cd /opt/app 2>/dev/null || true\n"
             "%s 2>&1\n"
             "echo 'Setup: done'\n", ctx->app->setup);
         growbuf_append(&script, line, (size_t)n);
@@ -770,6 +798,10 @@ static int run_app_json_cli(linux_backend_t *backend, app_config_t *app) {
     /* Clone repo */
     if (app->repo[0]) {
         printf("[clone] %s\n", app->repo);
+        bridge_exec_print(backend,
+            "sudo -n mkdir -p /opt/app 2>/dev/null; "
+            "sudo -n chown $(whoami) /opt/app 2>/dev/null; "
+            "mkdir -p /opt/app 2>/dev/null");
         char cmd[2048];
         snprintf(cmd, sizeof(cmd),
             "if [ -d /opt/app/.git ]; then cd /opt/app && git pull 2>&1; "
@@ -892,6 +924,7 @@ int main(int argc, char *argv[]) {
 
         linux_config_t config = {0};
         config.distro_name = app.distro;
+        config.timeout_ms = 300000; /* 5 minutes per exec for app installs */
 
         linux_backend_t *backend = linux_detect_backend(&config);
         char app_error[1024] = "";

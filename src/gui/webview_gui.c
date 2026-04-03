@@ -1228,15 +1228,30 @@ static void stream_exec_work(bind_ctx_t *ctx, const char *seq, const char *req) 
         return;
     }
 
-    /* Run command in background, output to temp log */
-    char cmd[8192];
-    snprintf(cmd, sizeof(cmd),
-        "mkdir -p /tmp/linux_template; rm -f /tmp/linux_template/_stream.log; "
-        "sh -c '(%s) > /tmp/linux_template/_stream.log 2>&1; echo __DONE:$?__ >> /tmp/linux_template/_stream.log' &",
+    /* Write command to a temp script file first (avoids shell quoting issues),
+     * then execute the script in background with output redirected to log. */
+    size_t write_len = strlen(command) + 256;
+    char *write_cmd = (char *)malloc(write_len);
+    if (!write_cmd) {
+        free(command);
+        webview_return(ctx->w, seq, 1, "\"Out of memory\"");
+        return;
+    }
+    snprintf(write_cmd, write_len,
+        "mkdir -p /tmp/linux_template; cat > /tmp/linux_template/_stream_script.sh << '__SCRIPT_EOF__'\n"
+        "%s\n"
+        "__SCRIPT_EOF__\n",
         command);
-
-    ctx->backend->exec(ctx->backend, cmd, NULL, NULL, NULL);
+    ctx->backend->exec(ctx->backend, write_cmd, NULL, NULL, NULL);
+    free(write_cmd);
     free(command);
+
+    ctx->backend->exec(ctx->backend,
+        "rm -f /tmp/linux_template/_stream.log; "
+        "sh -c 'bash /tmp/linux_template/_stream_script.sh "
+            "> /tmp/linux_template/_stream.log 2>&1; "
+            "echo __DONE:$?__ >> /tmp/linux_template/_stream.log' &",
+        NULL, NULL, NULL);
     webview_return(ctx->w, seq, 0, "\"started\"");
 }
 
