@@ -711,6 +711,15 @@ static int run_app_json(linux_backend_t *backend, service_manager_t *svc_mgr,
 }
 #endif /* HAVE_WEBVIEW && (_WIN32 || __APPLE__) */
 
+/* Close button callback for setup-required dialog */
+#ifdef HAVE_WEBVIEW
+static void on_close_app(const char *seq, const char *req, void *arg) {
+    (void)seq; (void)req;
+    webview_t w = (webview_t)arg;
+    webview_terminate(w);
+}
+#endif
+
 /* Show a GUI window explaining WSL is needed */
 static void show_setup_required(const char *detail) {
 #ifdef HAVE_WEBVIEW
@@ -772,8 +781,8 @@ static void show_setup_required(const char *detail) {
         "<a class='btn primary' "
         "href='https://learn.microsoft.com/en-us/windows/wsl/install' "
         "target='_blank'>Microsoft WSL Guide</a>"
-        "<button class='btn secondary' onclick='window.close()'>Close</button>"
-        "</div></div></body></html>";
+        "<button class='btn secondary' onclick='closeApp()'>Close</button>"
+        "</div></body></html>";
 
     size_t html_size = strlen(SETUP_HTML) + strlen(detail) + 64;
     char *html = (char *)malloc(html_size);
@@ -783,6 +792,7 @@ static void show_setup_required(const char *detail) {
         if (w) {
             webview_set_title(w, "Setup Required");
             webview_set_size(w, 580, 620, WEBVIEW_HINT_NONE);
+            webview_bind(w, "closeApp", on_close_app, w);
             webview_set_html(w, html);
             free(html);
             webview_run(w);
