@@ -483,6 +483,57 @@ static THREAD_FUNC_DECL setup_thread(THREAD_PARAM param) {
                        "{\"log\":\"\",\"error\":\"Setup failed\"}");
     } else {
         push_log(ctx, "Setup complete!");
+
+        /* Export the per-app WSL distro so the app folder is truly portable.
+         * The exported rootfs.tar.gz contains all installed deps + setup state.
+         * On a new machine, the backend imports it automatically — no reinstall. */
+#ifdef _WIN32
+        if (ctx->app->distro[0]) {
+            push_log(ctx, "Saving environment snapshot...");
+            push_status(ctx, "Saving...", "loading");
+
+            char export_path[MAX_PATH];
+            char edir[MAX_PATH];
+            GetModuleFileNameA(NULL, edir, MAX_PATH);
+            { char *s = strrchr(edir, '\\'); if (s) *s = '\0'; }
+            snprintf(export_path, sizeof(export_path),
+                     "%s\\linux\\rootfs.tar.gz", edir);
+
+            /* Build distro name same way as main() */
+            char safe[128];
+            int j = 0;
+            for (int i = 0; ctx->app->name[i] && j < (int)sizeof(safe) - 1; i++) {
+                char c = ctx->app->name[i];
+                if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') || c == '-' || c == '_')
+                    safe[j++] = c;
+                else if (c == ' ')
+                    safe[j++] = '_';
+            }
+            safe[j] = '\0';
+            if (!safe[0]) strncpy(safe, "app", sizeof(safe));
+
+            char wsl_cmd[MAX_PATH * 2];
+            snprintf(wsl_cmd, sizeof(wsl_cmd),
+                     "wsl.exe --export linbox-%s \"%s\"", safe, export_path);
+
+            STARTUPINFOA si = {0};
+            si.cb = sizeof(si);
+            si.dwFlags = STARTF_USESHOWWINDOW;
+            si.wShowWindow = SW_HIDE;
+            PROCESS_INFORMATION pi = {0};
+            if (CreateProcessA(NULL, wsl_cmd, NULL, NULL, FALSE,
+                               CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+                WaitForSingleObject(pi.hProcess, 300000); /* up to 5 min */
+                CloseHandle(pi.hThread);
+                CloseHandle(pi.hProcess);
+                push_log(ctx, "Environment saved. App folder is now portable.");
+            } else {
+                push_log(ctx, "Warning: could not export environment snapshot.");
+            }
+        }
+#endif
+
         push_status(ctx, "Ready", "ready");
         webview_return(ctx->w, task->seq, 0,
                        "{\"log\":\"\",\"error\":null}");
@@ -743,6 +794,55 @@ static void show_setup_required(const char *detail) {
  * Does the full setup sequence: deps -> clone -> setup -> start,
  * all in the terminal with streamed output.
  * ====================================================================== */
+/* Export the per-app WSL distro to rootfs.tar.gz for portability */
+static void export_app_distro(const char *app_name) {
+#ifdef _WIN32
+    char safe[128];
+    int j = 0;
+    for (int i = 0; app_name[i] && j < (int)sizeof(safe) - 1; i++) {
+        char c = app_name[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '_')
+            safe[j++] = c;
+        else if (c == ' ')
+            safe[j++] = '_';
+    }
+    safe[j] = '\0';
+    if (!safe[0]) strncpy(safe, "app", sizeof(safe));
+
+    char exe_dir[MAX_PATH];
+    GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
+    { char *s = strrchr(exe_dir, '\\'); if (s) *s = '\0'; }
+
+    char export_path[MAX_PATH];
+    snprintf(export_path, sizeof(export_path),
+             "%s\\linux\\rootfs.tar.gz", exe_dir);
+
+    printf("[snapshot] Saving environment to %s ...\n", export_path);
+
+    char wsl_cmd[MAX_PATH * 2];
+    snprintf(wsl_cmd, sizeof(wsl_cmd),
+             "wsl.exe --export linbox-%s \"%s\"", safe, export_path);
+
+    STARTUPINFOA si = {0};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi = {0};
+    if (CreateProcessA(NULL, wsl_cmd, NULL, NULL, FALSE,
+                       CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 300000);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        printf("[snapshot] Done. App folder is now portable.\n\n");
+    } else {
+        printf("[snapshot] Warning: could not save environment snapshot.\n\n");
+    }
+#else
+    (void)app_name;
+#endif
+}
+
 static int run_app_json_cli(linux_backend_t *backend, app_config_t *app) {
     /* Install dependencies */
     if (app->deps[0]) {
@@ -819,6 +919,10 @@ static int run_app_json_cli(linux_backend_t *backend, app_config_t *app) {
         bridge_exec_print(backend, cmd);
         printf("\n");
     }
+
+    /* Export distro snapshot after deps+setup for portability */
+    if (app->deps[0] || app->setup[0] || app->repo[0])
+        export_app_distro(app->name);
 
     /* Start (runs in foreground — Ctrl+C to stop) */
     if (app->start[0]) {
@@ -922,8 +1026,43 @@ int main(int argc, char *argv[]) {
         printf("=== %s ===\n", app.name);
         printf("Loaded app.json configuration.\n\n");
 
+        /* Each app gets its own WSL distro for portability.
+         * The distro name is derived from the app name so each app
+         * is isolated and can be exported/imported independently. */
+        char app_distro[256];
+        {
+            char safe[128];
+            int j = 0;
+            for (int i = 0; app.name[i] && j < (int)sizeof(safe) - 1; i++) {
+                char c = app.name[i];
+                if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') || c == '-' || c == '_')
+                    safe[j++] = c;
+                else if (c == ' ')
+                    safe[j++] = '_';
+            }
+            safe[j] = '\0';
+            if (!safe[0]) strncpy(safe, "app", sizeof(safe));
+            snprintf(app_distro, sizeof(app_distro), "linbox-%s", safe);
+        }
+
+        /* Check for an exported rootfs.tar.gz in the app's linux/ folder.
+         * If present, WSL will import it to create the per-app distro
+         * with all deps/setup already installed — no reinstall needed. */
+        char rootfs_path[MAX_PATH] = "";
+        char exe_dir[MAX_PATH] = "";
+#ifdef _WIN32
+        GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
+        { char *s = strrchr(exe_dir, '\\'); if (s) *s = '\0'; }
+        snprintf(rootfs_path, sizeof(rootfs_path),
+                 "%s\\linux\\rootfs.tar.gz", exe_dir);
+        if (GetFileAttributesA(rootfs_path) == INVALID_FILE_ATTRIBUTES)
+            rootfs_path[0] = '\0';  /* not found */
+#endif
+
         linux_config_t config = {0};
-        config.distro_name = app.distro;
+        config.distro_name = app_distro;
+        config.tar_gz_path = rootfs_path[0] ? rootfs_path : NULL;
         config.timeout_ms = 300000; /* 5 minutes per exec for app installs */
 
         linux_backend_t *backend = linux_detect_backend(&config);

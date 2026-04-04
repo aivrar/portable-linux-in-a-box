@@ -261,6 +261,7 @@ static linux_error_t wsl_start(linux_backend_t *self,
     BOOL registered = state->pIsRegistered(state->distro_name);
     if (!registered) {
         if (config->tar_gz_path) {
+            /* Import from an exported rootfs.tar.gz (portable app on new machine) */
             wchar_t tar_path_w[MAX_PATH];
             if (!utf8_to_utf16(config->tar_gz_path, tar_path_w, MAX_PATH)) {
                 wsl_set_error(state, "Failed to convert tar.gz path to UTF-16");
@@ -275,11 +276,64 @@ static linux_error_t wsl_start(linux_backend_t *self,
             }
             state->pConfigure(state->distro_name, 0, WSL_FLAGS_DEFAULT);
         } else {
-            wsl_set_error(state,
-                "Distribution '%s' is not registered and no tar.gz path provided.\n"
-                "Either provide a tar_gz_path in config, or install a WSL distro:\n"
-                "  wsl --install -d Ubuntu", name);
-            return LINUX_ERR_START_FAILED;
+            /* No exported rootfs — bootstrap by cloning from an existing distro.
+             * This is the first-launch path on the original machine. We clone
+             * Ubuntu (or whatever is available) into a per-app distro using
+             * wsl --export/--import so the app gets its own isolated filesystem. */
+            LINUX_LOG(config, "WSL2: bootstrapping '%s' from existing distro", name);
+
+            /* Find the exe directory for the import install path */
+            char exe_dir[MAX_PATH];
+            GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
+            { char *s = strrchr(exe_dir, '\\'); if (s) *s = '\0'; }
+
+            char install_dir[MAX_PATH];
+            snprintf(install_dir, sizeof(install_dir), "%s\\wsl", exe_dir);
+            CreateDirectoryA(install_dir, NULL);
+
+            /* wsl --export Ubuntu - | wsl --import <name> <path> - */
+            char clone_cmd[MAX_PATH * 3];
+            snprintf(clone_cmd, sizeof(clone_cmd),
+                "wsl.exe --export Ubuntu - | "
+                "wsl.exe --import %s \"%s\" -",
+                name, install_dir);
+
+            LINUX_LOG(config, "WSL2: running: %s", clone_cmd);
+
+            STARTUPINFOA si = {0};
+            si.cb = sizeof(si);
+            si.dwFlags = STARTF_USESHOWWINDOW;
+            si.wShowWindow = SW_HIDE;
+            PROCESS_INFORMATION pi = {0};
+
+            /* Use cmd /c to handle the pipe */
+            char full_cmd[MAX_PATH * 3 + 16];
+            snprintf(full_cmd, sizeof(full_cmd), "cmd /c \"%s\"", clone_cmd);
+
+            BOOL ok = CreateProcessA(NULL, full_cmd, NULL, NULL, FALSE,
+                                     CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+            if (ok) {
+                /* Wait up to 5 minutes for the clone */
+                WaitForSingleObject(pi.hProcess, 300000);
+                DWORD exit_code = 1;
+                GetExitCodeProcess(pi.hProcess, &exit_code);
+                CloseHandle(pi.hThread);
+                CloseHandle(pi.hProcess);
+
+                if (exit_code != 0) {
+                    wsl_set_error(state,
+                        "Failed to clone Ubuntu into '%s' (exit %lu).\n"
+                        "Make sure Ubuntu is installed: wsl --install -d Ubuntu",
+                        name, exit_code);
+                    return LINUX_ERR_START_FAILED;
+                }
+                LINUX_LOG(config, "WSL2: cloned Ubuntu into '%s'", name);
+            } else {
+                wsl_set_error(state,
+                    "Distribution '%s' is not registered and cloning failed.\n"
+                    "Install a WSL distro: wsl --install -d Ubuntu", name);
+                return LINUX_ERR_START_FAILED;
+            }
         }
     }
 
