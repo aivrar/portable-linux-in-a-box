@@ -276,62 +276,61 @@ static linux_error_t wsl_start(linux_backend_t *self,
             }
             state->pConfigure(state->distro_name, 0, WSL_FLAGS_DEFAULT);
         } else {
-            /* No exported rootfs — bootstrap by cloning from an existing distro.
-             * This is the first-launch path on the original machine. We clone
-             * Ubuntu (or whatever is available) into a per-app distro using
-             * wsl --export/--import so the app gets its own isolated filesystem. */
-            LINUX_LOG(config, "WSL2: bootstrapping '%s' from existing distro", name);
-
-            /* Find the exe directory for the import install path */
+            /* No exported rootfs — look for bundled ubuntu-base.tar.gz.
+             * This is a ~29 MB minimal Ubuntu rootfs that bootstraps in seconds. */
             char exe_dir[MAX_PATH];
             GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
             { char *s = strrchr(exe_dir, '\\'); if (s) *s = '\0'; }
 
-            char install_dir[MAX_PATH];
-            snprintf(install_dir, sizeof(install_dir), "%s\\wsl", exe_dir);
-            CreateDirectoryA(install_dir, NULL);
+            char base_path[MAX_PATH];
+            snprintf(base_path, sizeof(base_path),
+                     "%s\\linux\\ubuntu-base.tar.gz", exe_dir);
 
-            /* wsl --export Ubuntu - | wsl --import <name> <path> - */
-            char clone_cmd[MAX_PATH * 3];
-            snprintf(clone_cmd, sizeof(clone_cmd),
-                "wsl.exe --export Ubuntu - | "
-                "wsl.exe --import %s \"%s\" -",
-                name, install_dir);
+            if (GetFileAttributesA(base_path) != INVALID_FILE_ATTRIBUTES) {
+                /* Import from bundled minimal rootfs */
+                LINUX_LOG(config, "WSL2: bootstrapping '%s' from ubuntu-base.tar.gz", name);
 
-            LINUX_LOG(config, "WSL2: running: %s", clone_cmd);
+                char install_dir[MAX_PATH];
+                snprintf(install_dir, sizeof(install_dir), "%s\\wsl", exe_dir);
+                CreateDirectoryA(install_dir, NULL);
 
-            STARTUPINFOA si = {0};
-            si.cb = sizeof(si);
-            si.dwFlags = STARTF_USESHOWWINDOW;
-            si.wShowWindow = SW_HIDE;
-            PROCESS_INFORMATION pi = {0};
+                char import_cmd[MAX_PATH * 3];
+                snprintf(import_cmd, sizeof(import_cmd),
+                    "wsl.exe --import %s \"%s\" \"%s\"",
+                    name, install_dir, base_path);
 
-            /* Use cmd /c to handle the pipe */
-            char full_cmd[MAX_PATH * 3 + 16];
-            snprintf(full_cmd, sizeof(full_cmd), "cmd /c \"%s\"", clone_cmd);
+                STARTUPINFOA si = {0};
+                si.cb = sizeof(si);
+                si.dwFlags = STARTF_USESHOWWINDOW;
+                si.wShowWindow = SW_HIDE;
+                PROCESS_INFORMATION pi = {0};
 
-            BOOL ok = CreateProcessA(NULL, full_cmd, NULL, NULL, FALSE,
-                                     CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
-            if (ok) {
-                /* Wait up to 5 minutes for the clone */
-                WaitForSingleObject(pi.hProcess, 300000);
-                DWORD exit_code = 1;
-                GetExitCodeProcess(pi.hProcess, &exit_code);
-                CloseHandle(pi.hThread);
-                CloseHandle(pi.hProcess);
+                BOOL ok = CreateProcessA(NULL, import_cmd, NULL, NULL, FALSE,
+                                         CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+                if (ok) {
+                    WaitForSingleObject(pi.hProcess, 120000);
+                    DWORD exit_code = 1;
+                    GetExitCodeProcess(pi.hProcess, &exit_code);
+                    CloseHandle(pi.hThread);
+                    CloseHandle(pi.hProcess);
 
-                if (exit_code != 0) {
+                    if (exit_code != 0) {
+                        wsl_set_error(state,
+                            "Failed to import ubuntu-base.tar.gz into '%s' (exit %lu).",
+                            name, exit_code);
+                        return LINUX_ERR_START_FAILED;
+                    }
+                    LINUX_LOG(config, "WSL2: created '%s' from minimal rootfs", name);
+                } else {
                     wsl_set_error(state,
-                        "Failed to clone Ubuntu into '%s' (exit %lu).\n"
-                        "Make sure Ubuntu is installed: wsl --install -d Ubuntu",
-                        name, exit_code);
+                        "Failed to run wsl --import for '%s'.", name);
                     return LINUX_ERR_START_FAILED;
                 }
-                LINUX_LOG(config, "WSL2: cloned Ubuntu into '%s'", name);
             } else {
                 wsl_set_error(state,
-                    "Distribution '%s' is not registered and cloning failed.\n"
-                    "Install a WSL distro: wsl --install -d Ubuntu", name);
+                    "Distribution '%s' is not registered and no rootfs found.\n"
+                    "Place rootfs.tar.gz or ubuntu-base.tar.gz in the linux/ folder,\n"
+                    "or install WSL: wsl --install -d Ubuntu", name);
                 return LINUX_ERR_START_FAILED;
             }
         }
