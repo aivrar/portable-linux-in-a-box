@@ -22,6 +22,10 @@ Thumbs.db
 # WebView2 cache
 cache/
 
+# WSL virtual disks (created at runtime, not portable)
+*.vhdx
+wsl/
+
 # Generated apps (created by the user, not part of the template)
 app/apps/
 

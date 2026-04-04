@@ -1110,8 +1110,30 @@ int main(int argc, char *argv[]) {
 
     /* ---- Normal mode (no app.json) — GUI by default ---- */
     linux_config_t config = {0};
-    config.distro_name = "Ubuntu";
     int cli_mode = 0;
+
+    /* Template gets its own portable distro too */
+    char template_distro[256] = "linbox-template";
+    char template_rootfs[MAX_PATH] = "";
+#ifdef _WIN32
+    {
+        char edir[MAX_PATH];
+        GetModuleFileNameA(NULL, edir, MAX_PATH);
+        { char *s = strrchr(edir, '\\'); if (s) *s = '\0'; }
+
+        /* Check for exported snapshot first, then minimal base */
+        snprintf(template_rootfs, sizeof(template_rootfs),
+                 "%s\\linux\\rootfs.tar.gz", edir);
+        if (GetFileAttributesA(template_rootfs) == INVALID_FILE_ATTRIBUTES) {
+            snprintf(template_rootfs, sizeof(template_rootfs),
+                     "%s\\linux\\ubuntu-base.tar.gz", edir);
+            if (GetFileAttributesA(template_rootfs) == INVALID_FILE_ATTRIBUTES)
+                template_rootfs[0] = '\0';
+        }
+    }
+#endif
+    config.distro_name = template_distro;
+    config.tar_gz_path = template_rootfs[0] ? template_rootfs : NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--cli") == 0) {
