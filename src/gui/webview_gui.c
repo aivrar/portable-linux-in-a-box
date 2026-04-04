@@ -1109,6 +1109,7 @@ static void create_app_work(bind_ctx_t *ctx, const char *seq, const char *req) {
     /* Copy Linux images */
     {
         const char *images[] = {
+            "ubuntu-base.tar.gz",  /* minimal rootfs for per-app distro bootstrap */
             "bzImage", "initramfs.cpio.gz",  /* x86_64: WHPX/QEMU */
             "bbl64.bin", "rootfs-riscv64.ext2",  /* RISC-V: TinyEMU */
             NULL
