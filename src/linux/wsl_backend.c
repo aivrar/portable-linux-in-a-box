@@ -275,6 +275,7 @@ static linux_error_t wsl_start(linux_backend_t *self,
                 return LINUX_ERR_START_FAILED;
             }
             state->pConfigure(state->distro_name, 0, WSL_FLAGS_DEFAULT);
+            Sleep(2000); /* Let WSL finalize the new distro */
         } else {
             /* No exported rootfs — look for bundled ubuntu-base.tar.gz.
              * This is a ~29 MB minimal Ubuntu rootfs that bootstraps in seconds. */
@@ -321,6 +322,8 @@ static linux_error_t wsl_start(linux_backend_t *self,
                         return LINUX_ERR_START_FAILED;
                     }
                     LINUX_LOG(config, "WSL2: created '%s' from minimal rootfs", name);
+                    /* Give WSL a moment to finalize the new distro */
+                    Sleep(2000);
                 } else {
                     wsl_set_error(state,
                         "Failed to run wsl --import for '%s'.", name);

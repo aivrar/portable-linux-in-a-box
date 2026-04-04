@@ -412,7 +412,10 @@ static THREAD_FUNC_DECL setup_thread(THREAD_PARAM param) {
     growbuf_init(&script, 4096);
     /* Use set +e so one failed step doesn't abort everything.
      * Use unbuffered output so pip/curl progress shows in real-time. */
-    growbuf_append(&script, "set +e\nexport PYTHONUNBUFFERED=1\n", 31);
+    {
+        const char *header = "set +e\nexport PYTHONUNBUFFERED=1\n";
+        growbuf_append(&script, header, strlen(header));
+    }
 
     /* Dependencies */
     if (ctx->app->deps[0]) {
@@ -431,26 +434,28 @@ static THREAD_FUNC_DECL setup_thread(THREAD_PARAM param) {
             if (strcmp(dep, "python") == 0 || strcmp(dep, "python3") == 0) {
                 n = snprintf(line, sizeof(line),
                     "echo 'Installing: python'\n"
+                    "which python3 >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq python3 python3-pip curl) 2>&1\n"
                     "python3 -m pip --version >/dev/null 2>&1 || "
-                    "(curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3 - --user --break-system-packages --progress-bar on) 2>&1; "
+                    "(curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3 - --user --break-system-packages) 2>&1\n"
                     "export PATH=$HOME/.local/bin:$PATH\n"
                     "echo 'python: done'\n");
             } else if (strcmp(dep, "node") == 0 || strcmp(dep, "nodejs") == 0) {
                 n = snprintf(line, sizeof(line),
                     "echo 'Installing: node'\n"
-                    "which node || (curl -fsSL https://deb.nodesource.com/setup_lts.x|sudo -E bash - && "
-                    "sudo -n apt-get install -y -qq nodejs || sudo apk add nodejs npm) 2>&1\n"
+                    "which node >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq curl ca-certificates && "
+                    "curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && "
+                    "apt-get install -y -qq nodejs || apk add nodejs npm) 2>&1\n"
                     "echo 'node: done'\n");
             } else if (strcmp(dep, "git") == 0) {
                 n = snprintf(line, sizeof(line),
                     "echo 'Installing: git'\n"
-                    "which git || (sudo -n apt-get install -y -qq git || sudo apk add git) 2>&1\n"
+                    "which git >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq git || apk add git) 2>&1\n"
                     "echo 'git: done'\n");
             } else if (strcmp(dep, "base") == 0) {
                 n = snprintf(line, sizeof(line),
                     "echo 'Installing: base dev tools'\n"
-                    "which gcc || (sudo -n apt-get update -qq && sudo -n apt-get install -y -qq build-essential curl wget || "
-                    "sudo apk add build-base curl wget) 2>&1\n"
+                    "which gcc >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq build-essential curl wget git || "
+                    "apk add build-base curl wget) 2>&1\n"
                     "echo 'base: done'\n");
             } else {
                 n = snprintf(line, sizeof(line),
@@ -877,20 +882,22 @@ static int run_app_json_cli(linux_backend_t *backend, app_config_t *app) {
                 char cmd[512];
                 if (strcmp(dep, "python") == 0 || strcmp(dep, "python3") == 0) {
                     snprintf(cmd, sizeof(cmd),
+                        "which python3 >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq python3 python3-pip curl) 2>&1; "
                         "python3 -m pip --version >/dev/null 2>&1 || "
                         "(curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3 - --user --break-system-packages) 2>&1; "
                         "export PATH=$HOME/.local/bin:$PATH");
                 } else if (strcmp(dep, "node") == 0 || strcmp(dep, "nodejs") == 0) {
                     snprintf(cmd, sizeof(cmd),
-                        "which node || (curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - && "
-                        "sudo -n apt-get install -y -qq nodejs || sudo apk add nodejs npm) 2>&1");
+                        "which node >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq curl ca-certificates && "
+                        "curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && "
+                        "apt-get install -y -qq nodejs || apk add nodejs npm) 2>&1");
                 } else if (strcmp(dep, "git") == 0) {
                     snprintf(cmd, sizeof(cmd),
-                        "which git || (sudo -n apt-get install -y -qq git || sudo apk add git) 2>&1");
+                        "which git >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq git || apk add git) 2>&1");
                 } else if (strcmp(dep, "base") == 0) {
                     snprintf(cmd, sizeof(cmd),
-                        "which gcc || (sudo -n apt-get update -qq && sudo -n apt-get install -y -qq build-essential curl wget || "
-                        "sudo apk add build-base curl wget) 2>&1");
+                        "which gcc >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq build-essential curl wget git || "
+                        "apk add build-base curl wget) 2>&1");
                 } else {
                     snprintf(cmd, sizeof(cmd),
                         "sudo -n apt-get install -y -qq %s 2>/dev/null || sudo apk add %s 2>/dev/null",
