@@ -19,6 +19,10 @@ CMakeSettings.json
 Thumbs.db
 .DS_Store
 
+# Python
+__pycache__/
+*.pyc
+
 # WebView2 cache
 cache/
 

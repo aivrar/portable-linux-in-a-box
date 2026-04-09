@@ -23,6 +23,13 @@ static inline void compat_thread_launch(DWORD (WINAPI *fn)(LPVOID), void *arg) {
     if (h) CloseHandle(h);
 }
 
+/* Mutex */
+typedef CRITICAL_SECTION compat_mutex_t;
+#define COMPAT_MUTEX_INIT(m)    InitializeCriticalSection(&(m))
+#define COMPAT_MUTEX_LOCK(m)    EnterCriticalSection(&(m))
+#define COMPAT_MUTEX_UNLOCK(m)  LeaveCriticalSection(&(m))
+#define COMPAT_MUTEX_DESTROY(m) DeleteCriticalSection(&(m))
+
 /* Timing */
 #define COMPAT_TICK_MS()    GetTickCount()
 #define COMPAT_SLEEP_MS(ms) Sleep(ms)
@@ -47,6 +54,13 @@ static inline void compat_thread_launch(void *(*fn)(void *), void *arg) {
     if (pthread_create(&t, NULL, fn, arg) == 0)
         pthread_detach(t);
 }
+
+/* Mutex */
+typedef pthread_mutex_t compat_mutex_t;
+#define COMPAT_MUTEX_INIT(m)    pthread_mutex_init(&(m), NULL)
+#define COMPAT_MUTEX_LOCK(m)    pthread_mutex_lock(&(m))
+#define COMPAT_MUTEX_UNLOCK(m)  pthread_mutex_unlock(&(m))
+#define COMPAT_MUTEX_DESTROY(m) pthread_mutex_destroy(&(m))
 
 /* Timing */
 static inline unsigned long compat_tick_ms(void) {

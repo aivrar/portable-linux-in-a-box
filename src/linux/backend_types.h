@@ -60,6 +60,8 @@ typedef struct linux_config {
 /* --------------------------------------------------------------------------
  * Growing buffer for pipe reads
  * -------------------------------------------------------------------------- */
+#define GROWBUF_MAX_SIZE (64 * 1024 * 1024)  /* 64 MB hard limit */
+
 typedef struct {
     char  *data;
     size_t len;
@@ -75,6 +77,8 @@ static inline int growbuf_init(growbuf_t *b, size_t initial_cap) {
 }
 
 static inline int growbuf_append(growbuf_t *b, const char *data, size_t len) {
+    if (b->len + len > GROWBUF_MAX_SIZE)
+        return -1;  /* Refuse to grow beyond hard limit */
     if (b->len + len + 1 > b->cap) {
         size_t new_cap = b->cap * 2;
         if (new_cap <= b->cap) /* overflow guard */

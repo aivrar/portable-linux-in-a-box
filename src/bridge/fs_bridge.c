@@ -364,6 +364,23 @@ linux_error_t fs_download(linux_backend_t *backend,
     /* Read file as base64 from Linux */
     char *esc_path = shell_escape(linux_path);
     if (!esc_path) return LINUX_ERR_OUT_OF_MEMORY;
+
+    /* Check remote file size first to avoid memory exhaustion */
+    {
+        char size_cmd[512];
+        snprintf(size_cmd, sizeof(size_cmd), "stat -c '%%s' %s 2>/dev/null", esc_path);
+        char *size_out = NULL;
+        backend->exec(backend, size_cmd, &size_out, NULL, NULL);
+        if (size_out) {
+            long long fsize = atoll(size_out);
+            free(size_out);
+            if (fsize > 100LL * 1024 * 1024) {
+                free(esc_path);
+                return LINUX_ERR_INVALID_ARG;  /* > 100MB */
+            }
+        }
+    }
+
     size_t cmd_len = strlen(esc_path) + 32;
     char *cmd = (char *)malloc(cmd_len);
     if (!cmd) { free(esc_path); return LINUX_ERR_OUT_OF_MEMORY; }

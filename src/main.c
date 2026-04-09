@@ -30,7 +30,7 @@
  * {
  *     "name": "My AI App",
  *     "repo": "https://github.com/user/project",
- *     "deps": ["python", "git"],
+ *     "deps": "python, git",
  *     "setup": "pip install -r requirements.txt",
  *     "start": "python3 app.py --port 7860",
  *     "port": 7860,
@@ -51,7 +51,13 @@ typedef struct {
     int  loaded;
 } app_config_t;
 
-/* Find a key pattern in JSON only when outside of string values.
+/* Minimal flat-key JSON parser. Limitations:
+ * - Only extracts top-level keys (no nested object traversal).
+ * - Does not handle JSON arrays as values.
+ * - String values must not contain escaped quotes adjacent to the key.
+ * - Intended only for the simple app.json schema; not a general-purpose parser.
+ *
+ * Find a key pattern in JSON only when outside of string values.
  * Prevents matching "port" inside "description": "set port here". */
 static const char *find_key_outside_strings(const char *json, const char *pattern,
                                             size_t plen) {
@@ -95,6 +101,96 @@ static int json_extract(const char *json, const char *key,
         buf[i++] = *p++;
     buf[i] = '\0';
     return 1;
+}
+
+/* Forward declaration — used by invalidate_stale_snapshot below */
+static void make_distro_name(const char *app_name, char *out, size_t out_size);
+
+/* ── Snapshot Invalidation ─────────────────────────────────────
+ * Compute a hash of the setup+deps+repo fields from app.json.
+ * If the hash doesn't match the stored hash next to rootfs.tar.gz,
+ * delete the stale snapshot so the app rebuilds from scratch.
+ * This handles cases like switching git repos or changing cmake flags. */
+static unsigned long _hash_djb2(const char *str) {
+    unsigned long h = 5381;
+    int c;
+    while ((c = (unsigned char)*str++))
+        h = ((h << 5) + h) + c;
+    return h;
+}
+
+static void invalidate_stale_snapshot(const app_config_t *app, const char *exe_dir) {
+#ifdef _WIN32
+    /* Build a hash from the fields that affect the built environment */
+    char hashable[8192];
+    snprintf(hashable, sizeof(hashable), "%s|%s|%s", app->deps, app->setup, app->repo);
+    unsigned long hash = _hash_djb2(hashable);
+
+    char hash_path[MAX_PATH];
+    snprintf(hash_path, sizeof(hash_path), "%s\\linux\\rootfs.setup_hash", exe_dir);
+
+    char rootfs_path[MAX_PATH];
+    snprintf(rootfs_path, sizeof(rootfs_path), "%s\\linux\\rootfs.tar.gz", exe_dir);
+
+    /* If no snapshot exists, nothing to invalidate */
+    if (GetFileAttributesA(rootfs_path) == INVALID_FILE_ATTRIBUTES)
+        return;
+
+    /* Read existing hash */
+    FILE *hf = fopen(hash_path, "r");
+    if (hf) {
+        char stored[32] = "";
+        if (fgets(stored, sizeof(stored), hf)) {
+            unsigned long old_hash = strtoul(stored, NULL, 16);
+            fclose(hf);
+            if (old_hash == hash)
+                return;  /* hash matches — snapshot is current */
+        } else {
+            fclose(hf);
+        }
+    }
+
+    /* Hash mismatch or no hash file — snapshot is stale */
+    printf("[snapshot] app.json setup changed — deleting stale snapshot for rebuild.\n");
+    DeleteFileA(rootfs_path);
+
+    /* Also unregister the WSL distro so it imports fresh */
+    char distro[256];
+    make_distro_name(app->name, distro, sizeof(distro));
+    char unreg_cmd[512];
+    snprintf(unreg_cmd, sizeof(unreg_cmd), "wsl.exe --unregister %s", distro);
+    STARTUPINFOA si = {0}; si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi = {0};
+    if (CreateProcessA(NULL, unreg_cmd, NULL, NULL, FALSE,
+                       CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 30000);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    printf("[snapshot] Old environment removed. Fresh setup will run on next start.\n");
+#else
+    (void)app; (void)exe_dir;
+#endif
+}
+
+static void save_setup_hash(const app_config_t *app, const char *exe_dir) {
+#ifdef _WIN32
+    char hashable[8192];
+    snprintf(hashable, sizeof(hashable), "%s|%s|%s", app->deps, app->setup, app->repo);
+    unsigned long hash = _hash_djb2(hashable);
+
+    char hash_path[MAX_PATH];
+    snprintf(hash_path, sizeof(hash_path), "%s\\linux\\rootfs.setup_hash", exe_dir);
+
+    FILE *hf = fopen(hash_path, "w");
+    if (hf) {
+        fprintf(hf, "%lx", hash);
+        fclose(hf);
+    }
+#else
+    (void)app; (void)exe_dir;
+#endif
 }
 
 static int load_app_json(app_config_t *app) {
@@ -167,6 +263,11 @@ static void make_distro_name(const char *app_name, char *out, size_t out_size) {
     if (!safe[0]) strncpy(safe, "app", sizeof(safe));
     snprintf(out, out_size, "linbox-%s", safe);
 }
+
+/* Forward declaration — defined below, used in both app.json GUI and setup dialog */
+#ifdef HAVE_WEBVIEW
+static void on_close_app(const char *seq, const char *req, void *arg);
+#endif
 
 #if defined(HAVE_WEBVIEW) && (defined(_WIN32) || defined(__APPLE__))
 /* ======================================================================
@@ -244,32 +345,22 @@ static const char *APP_JSON_HTML_TEMPLATE =
 "    L(setup.log||'');\n"
 "    if(setup.error){S('Setup failed','error');L('ERROR: '+setup.error);return;}\n"
 "    L('');\n"
-"    S('Starting...','loading');\n"
-"    L('Starting application...');\n"
-"    const startResult=J(await appStart());\n"
-"    if(startResult.started){\n"
-"      L('Waiting for server...');\n"
-"      for(let i=0;i<90;i++){\n"
-"        await new Promise(r=>setTimeout(r,2000));\n"
-"        try{const c=J(await appCheck());if(c.ready){break;}}catch(e){}\n"
-"        L('.');\n"
-"      }\n"
-"      const c=J(await appCheck());\n"
-"      if(c.ready){\n"
-"        const url=J(await appUrl()).url;\n"
-"        S('Running','ready');\n"
-"        L('Server ready at '+url);\n"
-"        frame.src=url;\n"
-"        frame.style.display='flex';\n"
-"        log.style.display='none';\n"
-"        showingLog=false;\n"
-"        document.getElementById('toggle-btn').textContent='Show Log';\n"
-"      }else{S('Timeout','error');L('Server did not start in time.');}\n"
-"    }else{\n"
-"      S('Ready','ready');\n"
-"      L('Application ready. Use the terminal to run commands.');\n"
-"      if(termEnabled){toggleTerm();}\n"
+"    S('Starting UI...','loading');\n"
+"    L('Starting bridge server...');\n"
+"    var _br=J(await appStartBridge());\n"
+"    if(!_br.ok){S('Error','error');L('Bridge failed: '+(_br.error||'unknown'));return;}\n"
+"    var _burl='http://'+_br.host+':'+_br.port;\n"
+"    L('Bridge at '+_burl+' — waiting for UI...');\n"
+"    var _uiReady=false;\n"
+"    for(var _i=0;_i<30;_i++){\n"
+"      await new Promise(function(r){setTimeout(r,1000)});\n"
+"      try{await fetch(_burl+'/api/status',{mode:'no-cors'});_uiReady=true;break;}catch(_e){}\n"
+"      L('.');\n"
 "    }\n"
+"    if(_uiReady){\n"
+"      S('Running','ready');\n"
+"      window.location.href=_burl;\n"
+"    }else{S('Error','error');L('UI server did not start. Check that Python is installed.');}\n"
 "  }catch(e){S('Error','error');L('Fatal: '+e);}\n"
 "})();\n"
 "</script></body></html>\n";
@@ -358,7 +449,7 @@ static int exec_with_log(app_json_ctx_t *ctx, const char *command) {
     int rc = -1;
     int done = 0;
     unsigned long start_time = COMPAT_TICK_MS();
-    unsigned long timeout = 1800000; /* 30 minutes max for large installs */
+    unsigned long timeout = 3600000; /* 60 minutes max for large installs */
 
     while (!done && (COMPAT_TICK_MS() - start_time) < timeout) {
         COMPAT_SLEEP_MS(1500);
@@ -397,7 +488,7 @@ static int exec_with_log(app_json_ctx_t *ctx, const char *command) {
     ctx->backend->exec(ctx->backend,
         "rm -f /tmp/linux_template/_app_script.sh", NULL, NULL, NULL);
 
-    if (!done) push_log(ctx, "(timed out after 30 minutes)");
+    if (!done) push_log(ctx, "(timed out after 60 minutes)");
     return done ? rc : -1;
 }
 
@@ -541,6 +632,8 @@ static THREAD_FUNC_DECL setup_thread(THREAD_PARAM param) {
                     CloseHandle(pi.hThread);
                     CloseHandle(pi.hProcess);
                     push_log(ctx, "Environment saved. App folder is now portable.");
+                    /* Save setup hash so we can detect changes next time */
+                    save_setup_hash(ctx->app, edir);
                 } else {
                     push_log(ctx, "Warning: could not export environment snapshot.");
                 }
@@ -576,7 +669,10 @@ static THREAD_FUNC_DECL start_thread(THREAD_PARAM param) {
                                ctx->app->start, health[0] ? health : NULL,
                                ctx->app->port);
         if (idx >= 0) svc_start(ctx->svc_mgr, idx);
-        webview_return(ctx->w, task->seq, 0, "{\"started\":true}");
+        char resp[128];
+        snprintf(resp, sizeof(resp),
+                 "{\"started\":true,\"port\":%d}", ctx->app->port);
+        webview_return(ctx->w, task->seq, 0, resp);
     } else {
         webview_return(ctx->w, task->seq, 0, "{\"started\":false}");
     }
@@ -596,7 +692,7 @@ static THREAD_FUNC_DECL check_thread(THREAD_PARAM param) {
     async_task_t *task = (async_task_t *)param;
     app_json_ctx_t *ctx = task->ctx;
     int idx = svc_find(ctx->svc_mgr, "app");
-    if (idx >= 0 && svc_check(ctx->svc_mgr, idx) == SERVICE_RUNNING)
+    if (idx >= 0 && svc_check(ctx->svc_mgr, idx) == SVC_RUNNING)
         webview_return(ctx->w, task->seq, 0, "{\"ready\":true}");
     else
         webview_return(ctx->w, task->seq, 0, "{\"ready\":false}");
@@ -618,6 +714,109 @@ static void on_app_url(const char *seq, const char *req, void *arg) {
     char resp[256];
     snprintf(resp, sizeof(resp), "{\"url\":\"http://localhost:%d\"}", ctx->app->port);
     webview_return(ctx->w, seq, 0, resp);
+}
+
+/* Launch bridge.py inside WSL using the backend exec.
+ * Discovers the WSL2 VM IP so the WebView can reach the bridge directly,
+ * avoiding unreliable WSL2 localhost forwarding. */
+static int bridge_pid = 0;
+static int bridge_port = 9091;  /* per-app: derived from app.port + 1000 */
+static char bridge_host[64] = "localhost";  /* WSL2 VM IP or localhost */
+
+static int start_bridge(app_json_ctx_t *ctx) {
+    char exe_dir[MAX_PATH];
+    GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
+    char *s = strrchr(exe_dir, '\\');
+    if (s) *s = '\0';
+
+    /* Verify bridge.py exists on Windows side */
+    char bridge_path[MAX_PATH];
+    snprintf(bridge_path, sizeof(bridge_path), "%s\\bridge.py", exe_dir);
+    if (GetFileAttributesA(bridge_path) == INVALID_FILE_ATTRIBUTES)
+        return -1;
+
+    /* Convert Windows path to WSL /mnt/ path */
+    char wsl_path[MAX_PATH];
+    snprintf(wsl_path, sizeof(wsl_path), "/mnt/%c%s",
+             exe_dir[0] | 0x20, exe_dir + 2);
+    for (char *p = wsl_path; *p; p++)
+        if (*p == '\\') *p = '/';
+
+    /* Discover the WSL2 VM IP so Windows can reach the bridge reliably */
+    {
+        char *ip_out = NULL;
+        ctx->backend->exec(ctx->backend, "hostname -I | awk '{print $1}'",
+                           &ip_out, NULL, NULL);
+        if (ip_out && ip_out[0] && ip_out[0] != '\n') {
+            /* Trim whitespace */
+            char *end = ip_out + strlen(ip_out) - 1;
+            while (end > ip_out && (*end == '\n' || *end == '\r' || *end == ' '))
+                *end-- = '\0';
+            snprintf(bridge_host, sizeof(bridge_host), "%s", ip_out);
+        }
+        free(ip_out);
+    }
+
+    /* Launch bridge.py as a background process, passing port via env */
+    char cmd[MAX_PATH * 3];
+    snprintf(cmd, sizeof(cmd),
+             "BRIDGE_PORT=%d nohup python3 %s/bridge.py > /tmp/linux_template/bridge.log 2>&1 & echo $!",
+             bridge_port, wsl_path);
+
+    char *out = NULL;
+    int exit_code = -1;
+    linux_error_t rc = ctx->backend->exec(ctx->backend, cmd, &out, NULL, &exit_code);
+    if (rc != LINUX_OK || exit_code != 0) {
+        free(out);
+        return -1;
+    }
+    bridge_pid = (out && out[0]) ? atoi(out) : 0;
+    free(out);
+    return 0;
+}
+
+static void stop_bridge_with_backend(linux_backend_t *backend) {
+    if (bridge_pid > 1 && backend) {
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd),
+                 "kill -- -%d 2>/dev/null; kill %d 2>/dev/null; sleep 1; "
+                 "kill -0 %d 2>/dev/null && "
+                 "(kill -9 -- -%d 2>/dev/null; kill -9 %d 2>/dev/null)",
+                 bridge_pid, bridge_pid, bridge_pid, bridge_pid, bridge_pid);
+        backend->exec(backend, cmd, NULL, NULL, NULL);
+        bridge_pid = 0;
+    }
+}
+
+static void on_app_start_bridge(const char *seq, const char *req, void *arg) {
+    app_json_ctx_t *ctx = (app_json_ctx_t *)arg;
+    (void)req;
+    int rc = start_bridge(ctx);
+    if (rc == 0) {
+        char resp[256];
+        snprintf(resp, sizeof(resp),
+                 "{\"ok\":true,\"host\":\"%s\",\"port\":%d}", bridge_host, bridge_port);
+        webview_return(ctx->w, seq, 0, resp);
+    } else {
+        webview_return(ctx->w, seq, 0,
+                       "{\"ok\":false,\"error\":\"Failed to start bridge.py\"}");
+    }
+}
+
+static void on_app_navigate(const char *seq, const char *req, void *arg) {
+    app_json_ctx_t *ctx = (app_json_ctx_t *)arg;
+    /* req is JSON array: ["http://localhost:8080"] */
+    char url[512] = "";
+    if (req && req[0] == '[' && req[1] == '"') {
+        const char *s = req + 2;
+        const char *e = strchr(s, '"');
+        if (e && (size_t)(e - s) < sizeof(url)) {
+            memcpy(url, s, (size_t)(e - s));
+            url[e - s] = '\0';
+        }
+    }
+    if (url[0]) webview_navigate(ctx->w, url);
+    webview_return(ctx->w, seq, 0, "{}");
 }
 
 /* appExec — terminal command execution for app.json apps */
@@ -702,12 +901,18 @@ static int run_app_json(linux_backend_t *backend, service_manager_t *svc_mgr,
     webview_set_title(w, app->name);
     webview_set_size(w, app->width, app->height, WEBVIEW_HINT_NONE);
 
+    /* Derive unique bridge port from app port to avoid collisions */
+    bridge_port = app->port + 1000;
+
     app_json_ctx_t ctx = { w, backend, svc_mgr, app };
     webview_bind(w, "appSetup", on_app_setup, &ctx);
     webview_bind(w, "appStart", on_app_start, &ctx);
     webview_bind(w, "appCheck", on_app_check, &ctx);
     webview_bind(w, "appUrl",   on_app_url,   &ctx);
+    webview_bind(w, "appNavigate", on_app_navigate, &ctx);
+    webview_bind(w, "appStartBridge", on_app_start_bridge, &ctx);
     webview_bind(w, "appExec",  on_app_exec,  &ctx);
+    webview_bind(w, "closeApp", on_close_app, w);
 
     webview_set_html(w, html);
     webview_run(w);
@@ -716,7 +921,7 @@ static int run_app_json(linux_backend_t *backend, service_manager_t *svc_mgr,
 }
 #endif /* HAVE_WEBVIEW && (_WIN32 || __APPLE__) */
 
-/* Close button callback for setup-required dialog */
+/* Close/shutdown callback — terminates the WebView window */
 #ifdef HAVE_WEBVIEW
 static void on_close_app(const char *seq, const char *req, void *arg) {
     (void)seq; (void)req;
@@ -820,11 +1025,14 @@ static void show_setup_required(const char *detail) {
  * ====================================================================== */
 /* Export the per-app WSL distro to rootfs.tar.gz for portability.
  * Only exports if rootfs.tar.gz doesn't already exist. */
-static void export_app_distro(const char *app_name) {
+static void export_app_distro(const app_config_t *app) {
 #ifdef _WIN32
     char exe_dir[MAX_PATH];
     GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
     { char *s = strrchr(exe_dir, '\\'); if (s) *s = '\0'; }
+
+    /* Auto-invalidate stale snapshot if app.json setup changed */
+    invalidate_stale_snapshot(app, exe_dir);
 
     char export_path[MAX_PATH];
     snprintf(export_path, sizeof(export_path),
@@ -834,7 +1042,7 @@ static void export_app_distro(const char *app_name) {
     if (GetFileAttributesA(export_path) != INVALID_FILE_ATTRIBUTES) return;
 
     char distro[256];
-    make_distro_name(app_name, distro, sizeof(distro));
+    make_distro_name(app->name, distro, sizeof(distro));
 
     printf("[snapshot] Saving environment to %s ...\n", export_path);
 
@@ -853,11 +1061,13 @@ static void export_app_distro(const char *app_name) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
         printf("[snapshot] Done. App folder is now portable.\n\n");
+        /* Save setup hash so we can detect changes next time */
+        save_setup_hash(app, exe_dir);
     } else {
         printf("[snapshot] Warning: could not save environment snapshot.\n\n");
     }
 #else
-    (void)app_name;
+    (void)app;
 #endif
 }
 
@@ -942,7 +1152,7 @@ static int run_app_json_cli(linux_backend_t *backend, app_config_t *app) {
 
     /* Export distro snapshot after deps+setup for portability */
     if (app->deps[0] || app->setup[0] || app->repo[0])
-        export_app_distro(app->name);
+        export_app_distro(app);
 
     /* Start (runs in foreground — Ctrl+C to stop) */
     if (app->start[0]) {
@@ -1012,6 +1222,26 @@ static const char *backend_type_name(linux_backend_type_t t) {
 
 int main(int argc, char *argv[]) {
 #ifdef _WIN32
+    /* Prevent multiple instances — WebView2 takes an exclusive lock on its
+     * cache directory, so a second instance hangs forever.  Use a named mutex
+     * derived from the exe path so each app gets its own lock. */
+    {
+        char mutex_name[MAX_PATH + 32];
+        char exe_path[MAX_PATH];
+        GetModuleFileNameA(NULL, exe_path, MAX_PATH);
+        /* Turn backslashes into underscores for a valid mutex name */
+        for (char *p = exe_path; *p; p++)
+            if (*p == '\\' || *p == ':') *p = '_';
+        snprintf(mutex_name, sizeof(mutex_name), "Global\\linbox_%s", exe_path);
+        HANDLE hmutex = CreateMutexA(NULL, TRUE, mutex_name);
+        if (GetLastError() == ERROR_ALREADY_EXISTS) {
+            MessageBoxA(NULL, "This app is already running.",
+                        "Already Running", MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
+        /* hmutex intentionally not closed — stays alive with process */
+    }
+
     /* Redirect WebView2 cache to a 'cache' subdirectory next to our exe */
     {
         char cache_dir[MAX_PATH];
@@ -1058,6 +1288,9 @@ int main(int argc, char *argv[]) {
 #ifdef _WIN32
         GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
         { char *s = strrchr(exe_dir, '\\'); if (s) *s = '\0'; }
+
+        /* Auto-invalidate stale snapshot if app.json setup changed */
+        invalidate_stale_snapshot(&app, exe_dir);
         snprintf(rootfs_path, sizeof(rootfs_path),
                  "%s\\linux\\rootfs.tar.gz", exe_dir);
         if (GetFileAttributesA(rootfs_path) == INVALID_FILE_ATTRIBUTES)
@@ -1120,8 +1353,14 @@ int main(int argc, char *argv[]) {
 #endif
         }
         svc_stop_all(&svc_mgr);
+        stop_bridge_with_backend(backend);
         backend->stop(backend);
+#ifndef _WIN32
+        /* On Windows, skip destroy — ExitProcess() in WinMain kills all
+         * threads before memory is freed, avoiding a use-after-free race
+         * with detached WebView2/exec threads that reference the backend. */
         backend->destroy(backend);
+#endif
         return result;
     }
 
@@ -1232,7 +1471,9 @@ int main(int argc, char *argv[]) {
         if (gui_result >= 0) {
             svc_stop_all(&svc_mgr);
             backend->stop(backend);
+#ifndef _WIN32
             backend->destroy(backend);
+#endif
             return gui_result;
         }
         /* GUI failed (no WebView2) — fall through to CLI */
@@ -1249,16 +1490,22 @@ int main(int argc, char *argv[]) {
 
     svc_stop_all(&svc_mgr);
     backend->stop(backend);
+#ifndef _WIN32
     backend->destroy(backend);
+#endif
     return 0;
 }
 
 #ifdef _WIN32
-/* WinMain entry point — no console window */
+/* WinMain entry point — no console window.
+ * ExitProcess() is called BEFORE main() returns to kill all threads
+ * instantly. This prevents a use-after-free window where detached
+ * threads (WebView2 callbacks, exec threads) could access the backend
+ * after backend->destroy() frees it. The OS reclaims all memory on
+ * process exit, so skipping destroy is safe and eliminates the race. */
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)nShow;
     int result = main(__argc, __argv);
-    /* Force exit — kills all threads, WebView2, and WSL child processes */
     ExitProcess((UINT)result);
     return result;  /* unreachable; satisfies compiler */
 }

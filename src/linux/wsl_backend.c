@@ -172,13 +172,14 @@ static int shell_launch(wsl_state_t *state) {
     DWORD written;
     WriteFile(stdin_write, probe, (DWORD)strlen(probe), &written, NULL);
 
-    /* Read until __SHELL_READY__ appears (timeout 10s) */
+    /* Read until __SHELL_READY__ appears (timeout 30s).
+     * Cold WSL boots (after wsl --shutdown or first launch) can take 15-20s. */
     growbuf_t buf;
     growbuf_init(&buf, 1024);
     DWORD start = GetTickCount();
     int ready = 0;
 
-    while ((GetTickCount() - start) < 10000 && !ready) {
+    while ((GetTickCount() - start) < 30000 && !ready) {
         char tmp[READ_BUF_SIZE];
         int n = pipe_read_available(stdout_read, tmp, sizeof(tmp) - 1);
         if (n > 0) {
@@ -195,7 +196,7 @@ static int shell_launch(wsl_state_t *state) {
     growbuf_free(&buf);
 
     if (!ready) {
-        wsl_set_error(state, "Shell did not respond within 10 seconds");
+        wsl_set_error(state, "Shell did not respond within 30 seconds");
         TerminateProcess(process, 1);
         CloseHandle(process);
         CloseHandle(stdin_write);
@@ -513,6 +514,21 @@ static linux_error_t wsl_stop(linux_backend_t *self) {
     wsl_state_t *state = (wsl_state_t *)self->opaque;
     shell_close(state);
     state->running = 0;
+
+    /* Terminate the WSL distro so vmmem releases system memory.
+     * Without this, the distro stays running in the background. */
+    if (state->distro_name[0]) {
+        wchar_t cmd[512];
+        _snwprintf(cmd, 512, L"wsl.exe --terminate %ls", state->distro_name);
+        STARTUPINFOW si = { sizeof(si) };
+        PROCESS_INFORMATION pi = {0};
+        if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE,
+                           CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            WaitForSingleObject(pi.hProcess, 5000);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
+    }
     return LINUX_OK;
 }
 

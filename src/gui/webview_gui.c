@@ -1065,13 +1065,19 @@ static void create_app_work(bind_ctx_t *ctx, const char *seq, const char *req) {
             free(esc); free(resp); growbuf_free(&log);
             return;
         }
+        char *esc_name  = json_escape(name);
+        char *esc_distro = json_escape(distro);
+        char *esc_repo  = json_escape(repo);
+        char *esc_deps  = json_escape(deps);
+        char *esc_setup = json_escape(setup);
+        char *esc_start = json_escape(start);
         fprintf(f, "{\n");
-        fprintf(f, "    \"name\": \"%s\",\n", name);
-        fprintf(f, "    \"distro\": \"%s\",\n", distro);
-        if (repo[0]) fprintf(f, "    \"repo\": \"%s\",\n", repo);
-        if (deps[0]) fprintf(f, "    \"deps\": \"%s\",\n", deps);
-        if (setup[0]) fprintf(f, "    \"setup\": \"%s\",\n", setup);
-        if (start[0]) fprintf(f, "    \"start\": \"%s\",\n", start);
+        fprintf(f, "    \"name\": \"%s\",\n", esc_name);
+        fprintf(f, "    \"distro\": \"%s\",\n", esc_distro);
+        if (repo[0]) fprintf(f, "    \"repo\": \"%s\",\n", esc_repo);
+        if (deps[0]) fprintf(f, "    \"deps\": \"%s\",\n", esc_deps);
+        if (setup[0]) fprintf(f, "    \"setup\": \"%s\",\n", esc_setup);
+        if (start[0]) fprintf(f, "    \"start\": \"%s\",\n", esc_start);
         fprintf(f, "    \"port\": %s,\n", port_s);
         fprintf(f, "    \"width\": %s,\n", width_s);
         fprintf(f, "    \"height\": %s,\n", height_s);
@@ -1079,6 +1085,8 @@ static void create_app_work(bind_ctx_t *ctx, const char *seq, const char *req) {
                 strcmp(terminal_s, "true") == 0 ? "true" : "false");
         fprintf(f, "}\n");
         fclose(f);
+        free(esc_name); free(esc_distro); free(esc_repo);
+        free(esc_deps); free(esc_setup); free(esc_start);
     }
     n = snprintf(line, sizeof(line), "Created app.json\n");
     growbuf_append(&log, line, (size_t)n);

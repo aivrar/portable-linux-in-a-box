@@ -2,16 +2,17 @@
 #define LINUX_SERVICE_H
 
 #include "../linux/backend.h"
+#include "../compat.h"
 
 /* Maximum number of managed services */
 #define MAX_SERVICES 16
 
 /* Service state */
 typedef enum {
-    SERVICE_STOPPED = 0,
-    SERVICE_STARTING,
-    SERVICE_RUNNING,
-    SERVICE_FAILED
+    SVC_STOPPED = 0,
+    SVC_STARTING,
+    SVC_RUNNING,
+    SVC_FAILED
 } service_state_t;
 
 /* A managed background Linux service */
@@ -30,6 +31,7 @@ typedef struct {
     linux_backend_t *backend;
     linux_service_t  services[MAX_SERVICES];
     int              count;
+    compat_mutex_t   lock;
 } service_manager_t;
 
 /* Initialize the service manager */

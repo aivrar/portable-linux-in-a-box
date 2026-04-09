@@ -167,8 +167,13 @@ static linux_error_t socket_request(const char *method,
     memset(response, 0, sizeof(*response));
 
     /* Parse URL: http://host:port/path */
-    if (strncmp(url, "http://", 7) != 0)
-        return LINUX_ERR_INVALID_ARG;  /* Only HTTP for now */
+    if (strncmp(url, "http://", 7) != 0) {
+        /* HTTPS is not supported on the POSIX socket path.
+         * The Windows path uses WinHTTP which handles HTTPS natively.
+         * TODO: Add OpenSSL/TLS support for POSIX builds. */
+        fprintf(stderr, "[http_bridge] WARNING: HTTPS not supported on POSIX; url=%s\n", url);
+        return LINUX_ERR_INVALID_ARG;
+    }
 
     const char *hoststart = url + 7;
     const char *pathstart = strchr(hoststart, '/');
