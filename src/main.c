@@ -45,6 +45,7 @@ typedef struct {
     char start[2048];
     char distro[256];
     int  port;
+    int  bridge_port;  /* 0 = auto (port + 1000) */
     int  width;
     int  height;
     int  terminal;     /* 1 = show terminal panel for users */
@@ -234,6 +235,7 @@ static int load_app_json(app_config_t *app) {
 
     char tmp[32];
     if (json_extract(json, "port", tmp, sizeof(tmp))) app->port = atoi(tmp);
+    if (json_extract(json, "bridge_port", tmp, sizeof(tmp))) app->bridge_port = atoi(tmp);
     if (json_extract(json, "width", tmp, sizeof(tmp))) app->width = atoi(tmp);
     if (json_extract(json, "height", tmp, sizeof(tmp))) app->height = atoi(tmp);
     if (json_extract(json, "terminal", tmp, sizeof(tmp)))
@@ -901,8 +903,8 @@ static int run_app_json(linux_backend_t *backend, service_manager_t *svc_mgr,
     webview_set_title(w, app->name);
     webview_set_size(w, app->width, app->height, WEBVIEW_HINT_NONE);
 
-    /* Derive unique bridge port from app port to avoid collisions */
-    bridge_port = app->port + 1000;
+    /* Use explicit bridge_port from app.json, or default to port + 1000 */
+    bridge_port = app->bridge_port > 0 ? app->bridge_port : app->port + 1000;
 
     app_json_ctx_t ctx = { w, backend, svc_mgr, app };
     webview_bind(w, "appSetup", on_app_setup, &ctx);
