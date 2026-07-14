@@ -16,7 +16,12 @@ int svc_register(service_manager_t *mgr,
                  const char *command,
                  const char *health_url,
                  int port) {
-    if (mgr->count >= MAX_SERVICES) return -1;
+    COMPAT_MUTEX_LOCK(mgr->lock);
+
+    if (mgr->count >= MAX_SERVICES) {
+        COMPAT_MUTEX_UNLOCK(mgr->lock);
+        return -1;
+    }
 
     int idx = mgr->count++;
     linux_service_t *s = &mgr->services[idx];
@@ -41,6 +46,7 @@ int svc_register(service_manager_t *mgr,
     s->port = port;
     s->state = SVC_STOPPED;
 
+    COMPAT_MUTEX_UNLOCK(mgr->lock);
     return idx;
 }
 
@@ -95,18 +101,20 @@ linux_error_t svc_stop(service_manager_t *mgr, int index) {
     COMPAT_MUTEX_LOCK(mgr->lock);
     linux_service_t *s = &mgr->services[index];
 
-    /* Kill by PID (and its children) if known, fall back to port-based kill.
+    /* Kill by PID (and its children) if known.
      * SIGTERM first with grace period, then SIGKILL. Guard against PID <= 1.
      * kill -- -PID sends to the process group (catches child processes like
-     * VLLM::EngineCore and multiprocessing.resource_tracker). */
+     * VLLM::EngineCore and multiprocessing.resource_tracker). Do not use
+     * bare port-based kill here; a different process may have grabbed the
+     * port after this service died. */
     char cmd[512];
     if (s->pid > 1 && s->port > 0) {
         snprintf(cmd, sizeof(cmd),
                  "kill -- -%d 2>/dev/null; kill %d 2>/dev/null; sleep 2; "
                  "kill -0 %d 2>/dev/null && "
                  "(kill -9 -- -%d 2>/dev/null; kill -9 %d 2>/dev/null); "
-                 "fuser -k -9 %d/tcp 2>/dev/null; echo done",
-                 s->pid, s->pid, s->pid, s->pid, s->pid, s->port);
+                 "echo done",
+                 s->pid, s->pid, s->pid, s->pid, s->pid);
     } else if (s->pid > 1) {
         snprintf(cmd, sizeof(cmd),
                  "kill -- -%d 2>/dev/null; kill %d 2>/dev/null; sleep 2; "
@@ -115,10 +123,7 @@ linux_error_t svc_stop(service_manager_t *mgr, int index) {
                  "echo done",
                  s->pid, s->pid, s->pid, s->pid, s->pid);
     } else if (s->port > 0) {
-        snprintf(cmd, sizeof(cmd),
-                 "fuser -k %d/tcp 2>/dev/null; sleep 2; "
-                 "fuser -k -9 %d/tcp 2>/dev/null; echo done",
-                 s->port, s->port);
+        snprintf(cmd, sizeof(cmd), "echo no-pid-for-port-%d", s->port);
     } else {
         snprintf(cmd, sizeof(cmd), "echo done");
     }
@@ -202,11 +207,19 @@ service_state_t svc_check(service_manager_t *mgr, int index) {
 }
 
 void svc_stop_all(service_manager_t *mgr) {
-    for (int i = 0; i < mgr->count; i++) {
+    COMPAT_MUTEX_LOCK(mgr->lock);
+    int count = mgr->count;
+    int to_stop[MAX_SERVICES];
+    int n_stop = 0;
+    for (int i = 0; i < count; i++) {
         if (mgr->services[i].state == SVC_RUNNING ||
             mgr->services[i].state == SVC_STARTING) {
-            svc_stop(mgr, i);
+            to_stop[n_stop++] = i;
         }
+    }
+    COMPAT_MUTEX_UNLOCK(mgr->lock);
+    for (int i = 0; i < n_stop; i++) {
+        svc_stop(mgr, to_stop[i]);
     }
 }
 

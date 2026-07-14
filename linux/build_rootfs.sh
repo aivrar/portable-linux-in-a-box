@@ -14,7 +14,7 @@
 #
 # Requires: tar, gzip, cpio (or runs inside WSL/Linux)
 
-set -e
+set -euo pipefail
 
 OUTDIR="${1:-.}"
 ARCH="${2:-x86_64}"
@@ -26,6 +26,14 @@ mkdir -p "$OUTDIR"
 case "$ARCH" in
     x86_64|x86)
         echo "=== Building x86_64 initramfs ==="
+
+        for tool in tar gzip cpio find; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+                echo "Missing required build tool: $tool" >&2
+                echo "Install it before rebuilding the x86 initramfs." >&2
+                exit 1
+            fi
+        done
 
         ALPINE_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER}/releases/x86_64/alpine-minirootfs-${ALPINE_VER}.0-x86_64.tar.gz"
         TARBALL="$OUTDIR/_alpine-minirootfs.tar.gz"
@@ -93,7 +101,7 @@ export TERM=linux
 
 # Create basic files
 echo "root:x:0:0:root:/root:/bin/sh" > /etc/passwd
-echo "root:x:0:" > /etc/groups
+echo "root:x:0:" > /etc/group
 mkdir -p /root
 
 # Print banner

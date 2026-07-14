@@ -149,7 +149,7 @@ static const char *GUI_HTML =
 "      <button class='btn primary' onclick='runProvision(\"node\")'>Node.js + npm</button>\n"
 "      <button class='btn primary' onclick='runProvision(\"vllm\")'>vLLM (AI)</button>\n"
 "      <button class='btn primary' onclick='runProvision(\"llamacpp\")'>llama.cpp</button>\n"
-"      <button class='btn' onclick='runProvision(\"update\")' style='margin-left:8px'>Update All</button>\n"
+"      <button class='btn' onclick='runProvision(\"update\")' style='margin-left:8px'>Refresh Package Metadata</button>\n"
 "    </div>\n"
 "    <div style='margin-top:12px'>\n"
 "      <label style='font-size:12px;color:#8b949e'>Or run a custom install command:</label>\n"
@@ -182,7 +182,7 @@ static const char *GUI_HTML =
 "\n"
 "<!-- Create App -->\n"
 "<div class='panel' id='panel-create' style='overflow-y:auto'>\n"
-"  <div class='file-panel' style='max-width:600px;margin:0 auto;padding-bottom:20px'>\n"
+"  <div class='file-panel' style='max-width:700px;margin:0 auto;padding-bottom:20px'>\n"
 "    <h2 style='color:#f0f6fc;font-size:16px;margin-bottom:4px'>Create a New App (for distribution)</h2>\n"
 "    <p style='font-size:13px;color:#8b949e;margin-bottom:8px'>Package an app that other people can download and run. Pick a template or fill in manually:</p>\n"
 "    <div style='display:flex;gap:8px;margin-bottom:16px;align-items:center'>\n"
@@ -223,10 +223,20 @@ static const char *GUI_HTML =
 "      <div><label style='font-size:12px;color:#8b949e;display:block;margin-bottom:4px'>Start Command (launches the server)</label>\n"
 "        <input id='ca-start' type='text' placeholder='python3 app.py --port 7860' style='width:100%'></div>\n"
 "      <div style='display:flex;gap:12px'>\n"
-"        <div style='flex:1'><label style='font-size:12px;color:#8b949e;display:block;margin-bottom:4px'>Port</label>\n"
+"        <div style='flex:1'><label style='font-size:12px;color:#8b949e;display:block;margin-bottom:4px'>App Port</label>\n"
 "          <input id='ca-port' type='text' value='7860' style='width:100%'></div>\n"
+"        <div style='flex:1'><label style='font-size:12px;color:#8b949e;display:block;margin-bottom:4px'>Bridge Port</label>\n"
+"          <input id='ca-bridge-port' type='text' value='8860' style='width:100%'></div>\n"
 "        <div style='flex:1'><label style='font-size:12px;color:#8b949e;display:block;margin-bottom:4px'>WSL Distro</label>\n"
 "          <input id='ca-distro' type='text' value='Ubuntu' style='width:100%'></div>\n"
+"      </div>\n"
+"      <div id='port-manager' style='background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px'>\n"
+"        <div style='display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px'>\n"
+"          <div><b style='font-size:13px;color:#f0f6fc'>Child Port Assignments</b><div style='font-size:11px;color:#8b949e;margin-top:2px'>Both ports must be unique across children. The bridge defaults to app port + 1000.</div></div>\n"
+"          <div style='display:flex;gap:6px'><button class='btn' type='button' onclick='refreshPortPlan()'>Refresh</button><button class='btn primary' type='button' onclick='useSuggestedPorts()'>Use Next Free</button></div>\n"
+"        </div>\n"
+"        <div id='port-status' style='font-size:12px;color:#8b949e;margin-bottom:8px'>Loading assignments...</div>\n"
+"        <div id='port-assignments' style='font-family:monospace;font-size:11px;color:#8b949e;max-height:120px;overflow-y:auto'></div>\n"
 "      </div>\n"
 "      <div><label style='font-size:12px;color:#8b949e;display:block;margin-bottom:4px'>Dependencies (auto-installed before setup)</label>\n"
 "        <input id='ca-deps' type='text' placeholder='python, git, node, base, rust' style='width:100%'></div>\n"
@@ -277,6 +287,50 @@ static const char *GUI_HTML =
 "  jupyter:{name:'Jupyter Notebook',repo:'',deps:'python',setup:'pip install jupyter',start:'jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --NotebookApp.token=\\'\\'',port:'8888',terminal:true},\n"
 "  codeserver:{name:'Code Server',repo:'',deps:'base',setup:'curl -fsSL https://code-server.dev/install.sh | sh',start:'code-server --bind-addr 0.0.0.0:8080 --auth none',port:'8080',terminal:true}\n"
 "};\n"
+"let portPlan={assignments:[],suggested_port:7860,suggested_bridge_port:8860};\n"
+"let previousAppPort='7860',bridgePortIsAuto=true;\n"
+"function replaceCommandPort(oldPort,newPort){\n"
+"  if(!oldPort||oldPort===newPort)return;\n"
+"  const el=document.getElementById('ca-start');\n"
+"  const re=new RegExp('(^|\\\\D)'+oldPort+'(?=\\\\D|$)','g');\n"
+"  el.value=el.value.replace(re,'$1'+newPort);\n"
+"}\n"
+"function setAppPort(value,syncCommand=true){\n"
+"  const p=parseInt(value);if(!p)return;\n"
+"  const old=previousAppPort;\n"
+"  if(syncCommand)replaceCommandPort(old,String(p));\n"
+"  document.getElementById('ca-port').value=String(p);\n"
+"  const bridge=document.getElementById('ca-bridge-port');\n"
+"  if(bridgePortIsAuto||parseInt(bridge.value)===parseInt(old)+1000){bridge.value=String(p+1000);bridgePortIsAuto=true;}\n"
+"  previousAppPort=String(p);updatePortStatus();\n"
+"}\n"
+"function useSuggestedPorts(){\n"
+"  const old=previousAppPort;\n"
+"  const p=String(portPlan.suggested_port||7860);\n"
+"  replaceCommandPort(old,p);\n"
+"  document.getElementById('ca-port').value=p;\n"
+"  document.getElementById('ca-bridge-port').value=String(portPlan.suggested_bridge_port||parseInt(p)+1000);\n"
+"  previousAppPort=p;bridgePortIsAuto=true;updatePortStatus();\n"
+"}\n"
+"function updatePortStatus(){\n"
+"  const p=parseInt(document.getElementById('ca-port').value);\n"
+"  const bp=parseInt(document.getElementById('ca-bridge-port').value);\n"
+"  const hits=(portPlan.assignments||[]).filter(a=>a.port===p||a.bridge_port===p||a.port===bp||a.bridge_port===bp);\n"
+"  const status=document.getElementById('port-status');\n"
+"  if(!p||p<1||p>65535||!bp||bp<1||bp>65535){status.style.color='#f85149';status.textContent='Enter two valid ports from 1 to 65535.';}\n"
+"  else if(p===bp){status.style.color='#d29922';status.textContent='Warning: app and bridge use the same port. This is only safe when one server owns both roles.';}\n"
+"  else if(hits.length){status.style.color='#f85149';status.textContent='Conflict with: '+hits.map(a=>a.name+' ('+a.port+'/'+a.bridge_port+')').join(', ');}\n"
+"  else{status.style.color='#7ee787';status.textContent='Available pair: app '+p+', bridge '+bp;}\n"
+"}\n"
+"async function refreshPortPlan(){\n"
+"  const box=document.getElementById('port-assignments');\n"
+"  try{\n"
+"    portPlan=J(await getPortPlan());\n"
+"    const items=portPlan.assignments||[];\n"
+"    box.textContent=items.length?items.map(a=>a.name.padEnd(24)+' app '+String(a.port).padStart(5)+'  bridge '+String(a.bridge_port).padStart(5)).join('\\n'):'No child assignments yet.';\n"
+"    updatePortStatus();\n"
+"  }catch(e){box.textContent='Could not read child assignments: '+e;}\n"
+"}\n"
 "function loadSample(id){\n"
 "  const s=SAMPLES[id];if(!s)return;\n"
 "  document.getElementById('ca-name').value=s.name;\n"
@@ -284,13 +338,17 @@ static const char *GUI_HTML =
 "  document.getElementById('ca-deps').value=s.deps;\n"
 "  document.getElementById('ca-setup').value=s.setup;\n"
 "  document.getElementById('ca-start').value=s.start;\n"
-"  document.getElementById('ca-port').value=s.port;\n"
+"  document.getElementById('ca-port').value=String(s.port);\n"
+"  document.getElementById('ca-bridge-port').value=String(parseInt(s.port)+1000);\n"
+"  previousAppPort=String(s.port);bridgePortIsAuto=true;\n"
+"  const collision=(portPlan.assignments||[]).some(a=>a.port===parseInt(s.port)||a.bridge_port===parseInt(s.port)||a.port===parseInt(s.port)+1000||a.bridge_port===parseInt(s.port)+1000);\n"
+"  if(collision)useSuggestedPorts();else setAppPort(s.port);\n"
 "  document.getElementById('ca-terminal').checked=s.terminal;\n"
 "  document.getElementById('app-log').textContent='Loaded sample: '+s.name+'\\nReview the fields and click Create & Package App.';\n"
 "}\n"
 "function clearForm(){\n"
 "  ['ca-name','ca-repo','ca-deps','ca-setup','ca-start'].forEach(id=>document.getElementById(id).value='');\n"
-"  document.getElementById('ca-port').value='7860';\n"
+"  useSuggestedPorts();\n"
 "  document.getElementById('ca-terminal').checked=false;\n"
 "  document.getElementById('app-log').textContent='';\n"
 "  document.getElementById('sample-select').value='';\n"
@@ -300,6 +358,8 @@ static const char *GUI_HTML =
 "document.getElementById('distro-select').addEventListener('change', e => {\n"
 "  document.getElementById('ca-distro').value = e.target.value;\n"
 "});\n"
+"document.getElementById('ca-port').addEventListener('change',e=>setAppPort(e.target.value));\n"
+"document.getElementById('ca-bridge-port').addEventListener('change',e=>{bridgePortIsAuto=parseInt(e.target.value)===parseInt(document.getElementById('ca-port').value)+1000;updatePortStatus();});\n"
 "\n"
 "// Tab switching\n"
 "document.getElementById('tabs').addEventListener('click', e => {\n"
@@ -309,6 +369,7 @@ static const char *GUI_HTML =
 "  e.target.classList.add('active');\n"
 "  document.getElementById('panel-' + e.target.dataset.tab).classList.add('active');\n"
 "  if (e.target.dataset.tab === 'services') refreshServices();\n"
+"  if (e.target.dataset.tab === 'create') refreshPortPlan();\n"
 "});\n"
 "\n"
 "function addLine(text, cls) {\n"
@@ -472,6 +533,11 @@ static const char *GUI_HTML =
 "async function createApp() {\n"
 "  const name = document.getElementById('ca-name').value.trim();\n"
 "  if (!name) { alert('App name is required.'); return; }\n"
+"  const appPort=parseInt(document.getElementById('ca-port').value);\n"
+"  const bridgePort=parseInt(document.getElementById('ca-bridge-port').value);\n"
+"  if(!appPort||appPort<1||appPort>65535||!bridgePort||bridgePort<1||bridgePort>65535){alert('App and bridge ports must be between 1 and 65535.');return;}\n"
+"  const conflicts=(portPlan.assignments||[]).filter(a=>a.port===appPort||a.bridge_port===appPort||a.port===bridgePort||a.bridge_port===bridgePort);\n"
+"  if(conflicts.length){alert('Port conflict with '+conflicts.map(a=>a.name).join(', ')+'. Use Next Free or choose another pair.');return;}\n"
 "  const config = {\n"
 "    name: name,\n"
 "    repo: document.getElementById('ca-repo').value.trim(),\n"
@@ -479,7 +545,8 @@ static const char *GUI_HTML =
 "    setup: document.getElementById('ca-setup').value.trim(),\n"
 "    start: document.getElementById('ca-start').value.trim(),\n"
 "    distro: document.getElementById('ca-distro').value.trim() || 'Ubuntu',\n"
-"    port: String(parseInt(document.getElementById('ca-port').value) || 7860),\n"
+"    port: String(appPort),\n"
+"    bridge_port: String(bridgePort),\n"
 "    width: String(parseInt(document.getElementById('ca-width').value) || 1100),\n"
 "    height: String(parseInt(document.getElementById('ca-height').value) || 750),\n"
 "    terminal: document.getElementById('ca-terminal').checked ? 'true' : 'false'\n"
@@ -501,6 +568,7 @@ static const char *GUI_HTML =
 "      document.getElementById('test-btn').style.display = '';\n"
 "      document.getElementById('folder-btn').style.display = '';\n"
 "      document.getElementById('test-status').textContent = 'Ready';\n"
+"      await refreshPortPlan();\n"
 "    }\n"
 "  } catch(e) { logMsg('Error: ' + e); }\n"
 "}\n"
@@ -620,6 +688,7 @@ static const char *GUI_HTML =
 "  } catch(e) {}\n"
 "}\n"
 "loadDistros();\n"
+"refreshPortPlan();\n"
 "\n"
 "// Startup\n"
 "(async function() {\n"
@@ -692,8 +761,9 @@ static int json_find_string(const char *json, const char *key,
     p = strchr(p, '"');
     if (!p) return 0;
     p++;
-    const char *e = strchr(p, '"');
-    if (!e) return 0;
+    const char *e = p;
+    while (*e && !(*e == '"' && (e == p || *(e - 1) != '\\'))) e++;
+    if (!*e) return 0;
     size_t len = (size_t)(e - p);
     if (len >= buf_size) len = buf_size - 1;
     memcpy(buf, p, len);
@@ -711,14 +781,131 @@ static int json_find_int(const char *json, const char *key) {
     return atoi(p);
 }
 
+#define MAX_PORT_ASSIGNMENTS 256
+typedef struct {
+    char name[256];
+    int port;
+    int bridge_port;
+} port_assignment_t;
+
+static int read_small_text_file(const char *path, char **text_out) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
+    long size = ftell(f);
+    if (size < 0 || size > 1024 * 1024 || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return 0;
+    }
+    char *text = (char *)malloc((size_t)size + 1);
+    if (!text) { fclose(f); return 0; }
+    size_t got = fread(text, 1, (size_t)size, f);
+    fclose(f);
+    text[got] = '\0';
+    *text_out = text;
+    return 1;
+}
+
+static int collect_port_assignments(const char *exe_dir,
+                                    port_assignment_t *items, int capacity) {
+    int count = 0;
+#ifdef _WIN32
+    char pattern[MAX_PATH];
+    snprintf(pattern, sizeof(pattern), "%s\\apps\\*", exe_dir);
+    WIN32_FIND_DATAA data;
+    HANDLE find = FindFirstFileA(pattern, &data);
+    if (find == INVALID_HANDLE_VALUE) return 0;
+    do {
+        if (!(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            strcmp(data.cFileName, ".") == 0 || strcmp(data.cFileName, "..") == 0)
+            continue;
+        char path[MAX_PATH];
+        snprintf(path, sizeof(path), "%s\\apps\\%s\\app.json",
+                 exe_dir, data.cFileName);
+        char *json = NULL;
+        if (!read_small_text_file(path, &json)) continue;
+        int port = json_find_int(json, "port");
+        int bridge = json_find_int(json, "bridge_port");
+        if (bridge <= 0 && port > 0) bridge = port + 1000;
+        if (bridge < 1 || bridge > 65535) bridge = 9091;
+        if (port > 0 && port <= 65535 && count < capacity) {
+            if (!json_find_string(json, "name", items[count].name,
+                                  sizeof(items[count].name)))
+                snprintf(items[count].name, sizeof(items[count].name), "%s",
+                         data.cFileName);
+            items[count].port = port;
+            items[count].bridge_port = bridge;
+            count++;
+        }
+        free(json);
+    } while (FindNextFileA(find, &data));
+    FindClose(find);
+#else
+    (void)exe_dir; (void)items; (void)capacity;
+#endif
+    return count;
+}
+
+static int assignment_uses_port(const port_assignment_t *items, int count,
+                                int port) {
+    for (int i = 0; i < count; i++)
+        if (items[i].port == port || items[i].bridge_port == port) return 1;
+    return 0;
+}
+
+static void suggest_port_pair(const port_assignment_t *items, int count,
+                              int *port_out, int *bridge_out) {
+    for (int port = 7860; port <= 64535; port++) {
+        int bridge = port + 1000;
+        if (!assignment_uses_port(items, count, port) &&
+            !assignment_uses_port(items, count, bridge)) {
+            *port_out = port;
+            *bridge_out = bridge;
+            return;
+        }
+    }
+    *port_out = 0;
+    *bridge_out = 0;
+}
+
+static int parse_valid_port(const char *text) {
+    if (!text || !text[0]) return 0;
+    char *end = NULL;
+    long value = strtol(text, &end, 10);
+    if (!end || *end != '\0' || value < 1 || value > 65535) return 0;
+    return (int)value;
+}
+
+typedef struct bind_ctx bind_ctx_t;
+
+static void return_create_error(webview_t w, const char *seq,
+                                growbuf_t *log, const char *message) {
+    char *log_text = growbuf_finish(log);
+    char *log_esc = json_escape(log_text ? log_text : "");
+    char *error_esc = json_escape(message ? message : "Unknown error");
+    size_t size = strlen(log_esc) + strlen(error_esc) + 64;
+    char *resp = (char *)malloc(size);
+    if (resp) {
+        snprintf(resp, size, "{\"log\":\"%s\",\"error\":\"%s\"}",
+                 log_esc, error_esc);
+        webview_return(w, seq, 0, resp);
+        free(resp);
+    } else {
+        webview_return(w, seq, 1, "\"Out of memory\"");
+    }
+    free(log_text);
+    free(log_esc);
+    free(error_esc);
+}
+
 /* --------------------------------------------------------------------------
  * Binding context — holds all state the JS callbacks need
  * -------------------------------------------------------------------------- */
-typedef struct {
+struct bind_ctx {
     webview_t          w;
     linux_backend_t   *backend;
     service_manager_t *svc_mgr;
-} bind_ctx_t;
+};
 
 /* --------------------------------------------------------------------------
  * Async dispatch — runs WebView callbacks on background threads
@@ -816,6 +1003,12 @@ static void http_work(bind_ctx_t *ctx, const char *seq, const char *req) {
     char *body_esc = json_escape(resp.body ? resp.body : "");
     size_t sz = strlen(body_esc) + 128;
     char *out = (char *)malloc(sz);
+    if (!out) {
+        free(body_esc);
+        http_response_free(&resp);
+        webview_return(ctx->w, seq, 1, "\"Out of memory\"");
+        return;
+    }
     snprintf(out, sz, "{\"status\":%d,\"body\":\"%s\"}", resp.status_code, body_esc);
     webview_return(ctx->w, seq, 0, out);
     free(body_esc); free(out);
@@ -973,6 +1166,53 @@ static void on_provision_run(const char *seq, const char *req, void *arg) {
     dispatch_async(seq, req, arg, provision_work);
 }
 
+/* Inventory persistent child assignments and suggest a collision-free pair. */
+static void port_plan_work(bind_ctx_t *ctx, const char *seq, const char *req) {
+    (void)req;
+    char exe_dir[MAX_PATH];
+#ifdef _WIN32
+    GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
+    char *slash = strrchr(exe_dir, '\\');
+    if (slash) *slash = '\0';
+#else
+    snprintf(exe_dir, sizeof(exe_dir), ".");
+#endif
+
+    port_assignment_t assignments[MAX_PORT_ASSIGNMENTS];
+    int count = collect_port_assignments(exe_dir, assignments,
+                                         MAX_PORT_ASSIGNMENTS);
+    int suggested = 0, suggested_bridge = 0;
+    suggest_port_pair(assignments, count, &suggested, &suggested_bridge);
+
+    growbuf_t json;
+    growbuf_init(&json, 2048);
+    const char *prefix = "{\"assignments\":[";
+    growbuf_append(&json, prefix, strlen(prefix));
+    for (int i = 0; i < count; i++) {
+        char *name = json_escape(assignments[i].name);
+        char item[512];
+        int n = snprintf(item, sizeof(item),
+            "%s{\"name\":\"%s\",\"port\":%d,\"bridge_port\":%d}",
+            i ? "," : "", name, assignments[i].port,
+            assignments[i].bridge_port);
+        growbuf_append(&json, item, (size_t)n);
+        free(name);
+    }
+    char suffix[128];
+    int n = snprintf(suffix, sizeof(suffix),
+        "],\"suggested_port\":%d,\"suggested_bridge_port\":%d}",
+        suggested, suggested_bridge);
+    growbuf_append(&json, suffix, (size_t)n);
+    char *result = growbuf_finish(&json);
+    webview_return(ctx->w, seq, 0, result ? result :
+        "{\"assignments\":[],\"suggested_port\":7860,\"suggested_bridge_port\":8860}");
+    free(result);
+}
+
+static void on_get_port_plan(const char *seq, const char *req, void *arg) {
+    dispatch_async(seq, req, arg, port_plan_work);
+}
+
 /* --------------------------------------------------------------------------
  * JS binding: createAppPackage(config_json) — generates a distributable app
  * -------------------------------------------------------------------------- */
@@ -992,7 +1232,8 @@ static void create_app_work(bind_ctx_t *ctx, const char *seq, const char *req) {
     char name[256] = "", repo[1024] = "", deps[1024] = "";
     char setup[2048] = "", start[2048] = "";
     char distro[256] = "Ubuntu", terminal_s[16] = "false";
-    char port_s[16] = "7860", width_s[16] = "1100", height_s[16] = "750";
+    char port_s[16] = "7860", bridge_port_s[16] = "8860";
+    char width_s[16] = "1100", height_s[16] = "750";
     json_find_string(config_json, "name", name, sizeof(name));
     json_find_string(config_json, "repo", repo, sizeof(repo));
     json_find_string(config_json, "deps", deps, sizeof(deps));
@@ -1000,6 +1241,8 @@ static void create_app_work(bind_ctx_t *ctx, const char *seq, const char *req) {
     json_find_string(config_json, "start", start, sizeof(start));
     json_find_string(config_json, "distro", distro, sizeof(distro));
     json_find_string(config_json, "port", port_s, sizeof(port_s));
+    json_find_string(config_json, "bridge_port", bridge_port_s,
+                     sizeof(bridge_port_s));
     json_find_string(config_json, "width", width_s, sizeof(width_s));
     json_find_string(config_json, "height", height_s, sizeof(height_s));
     json_find_string(config_json, "terminal", terminal_s, sizeof(terminal_s));
@@ -1033,6 +1276,36 @@ static void create_app_work(bind_ctx_t *ctx, const char *seq, const char *req) {
         if (!safe_name[0]) strncpy(safe_name, "my_app", sizeof(safe_name));
     }
 
+    /* Re-scan at creation time so a stale browser view cannot create a
+     * collision. Both the application port and control bridge port share the
+     * Windows/WSL localhost surface and therefore belong to one assignment
+     * pool. */
+    int app_port = parse_valid_port(port_s);
+    int app_bridge_port = parse_valid_port(bridge_port_s);
+    if (!app_port || !app_bridge_port) {
+        return_create_error(ctx->w, seq, &log,
+            "App and bridge ports must be integers from 1 to 65535.");
+        return;
+    }
+    port_assignment_t assignments[MAX_PORT_ASSIGNMENTS];
+    int assignment_count = collect_port_assignments(
+        exe_dir, assignments, MAX_PORT_ASSIGNMENTS);
+    for (int i = 0; i < assignment_count; i++) {
+        if (assignments[i].port == app_port ||
+            assignments[i].bridge_port == app_port ||
+            assignments[i].port == app_bridge_port ||
+            assignments[i].bridge_port == app_bridge_port) {
+            char error[512];
+            snprintf(error, sizeof(error),
+                "Ports %d/%d conflict with child '%s' (app %d, bridge %d). "
+                "Refresh assignments and use the next free pair.",
+                app_port, app_bridge_port, assignments[i].name,
+                assignments[i].port, assignments[i].bridge_port);
+            return_create_error(ctx->w, seq, &log, error);
+            return;
+        }
+    }
+
     snprintf(app_dir, sizeof(app_dir), "%s\\apps\\%s", exe_dir, safe_name);
     n = snprintf(line, sizeof(line), "Creating: %s\n", app_dir);
     growbuf_append(&log, line, (size_t)n);
@@ -1041,7 +1314,7 @@ static void create_app_work(bind_ctx_t *ctx, const char *seq, const char *req) {
     char mkdir_cmd[MAX_PATH + 32];
     snprintf(mkdir_cmd, sizeof(mkdir_cmd), "%s\\linux", app_dir);
 #ifdef _WIN32
-    CreateDirectoryA(app_dir - (app_dir - app_dir), NULL); /* apps/ parent */
+    CreateDirectoryA(app_dir, NULL); /* apps/ parent */
     {
         char apps_dir[MAX_PATH];
         snprintf(apps_dir, sizeof(apps_dir), "%s\\apps", exe_dir);
@@ -1078,7 +1351,8 @@ static void create_app_work(bind_ctx_t *ctx, const char *seq, const char *req) {
         if (deps[0]) fprintf(f, "    \"deps\": \"%s\",\n", esc_deps);
         if (setup[0]) fprintf(f, "    \"setup\": \"%s\",\n", esc_setup);
         if (start[0]) fprintf(f, "    \"start\": \"%s\",\n", esc_start);
-        fprintf(f, "    \"port\": %s,\n", port_s);
+        fprintf(f, "    \"port\": %d,\n", app_port);
+        fprintf(f, "    \"bridge_port\": %d,\n", app_bridge_port);
         fprintf(f, "    \"width\": %s,\n", width_s);
         fprintf(f, "    \"height\": %s,\n", height_s);
         fprintf(f, "    \"terminal\": %s\n",
@@ -1246,6 +1520,12 @@ static void stream_exec_work(bind_ctx_t *ctx, const char *seq, const char *req) 
         webview_return(ctx->w, seq, 1, "\"Out of memory\"");
         return;
     }
+    /* Sanitize: if command contains the delimiter, replace it */
+    char *pos = command;
+    while ((pos = strstr(pos, "__SCRIPT_EOF__")) != NULL) {
+        memcpy(pos, "__SCRIPT_E0F__", 14);
+        pos += 14;
+    }
     snprintf(write_cmd, write_len,
         "mkdir -p /tmp/linux_template; cat > /tmp/linux_template/_stream_script.sh << '__SCRIPT_EOF__'\n"
         "%s\n"
@@ -1371,6 +1651,7 @@ int gui_run_webview(linux_backend_t *backend, const linux_config_t *config,
     webview_bind(w, "svcRegister",  on_svc_register,  &ctx);
     webview_bind(w, "svcAction",    on_svc_action,    &ctx);
     webview_bind(w, "provisionRun", on_provision_run, &ctx);
+    webview_bind(w, "getPortPlan",  on_get_port_plan,  &ctx);
     webview_bind(w, "createAppPackage", on_create_app, &ctx);
     webview_bind(w, "listDistros",     on_list_distros, &ctx);
     webview_bind(w, "streamExec",      on_stream_exec,  &ctx);

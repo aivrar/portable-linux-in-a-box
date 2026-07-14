@@ -1,10 +1,10 @@
 # Portable Linux in a Box
 
-![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2011+-lightgrey) ![Platform: Linux](https://img.shields.io/badge/Platform-Linux-orange) ![Language: C](https://img.shields.io/badge/Language-C11-blue)
+[![Latest Release](https://img.shields.io/github/v/release/aivrar/portable-linux-in-a-box)](https://github.com/aivrar/portable-linux-in-a-box/releases/latest) [![Downloads](https://img.shields.io/github/downloads/aivrar/portable-linux-in-a-box/total)](https://github.com/aivrar/portable-linux-in-a-box/releases) [![Documentation](https://img.shields.io/badge/docs-wiki-blue)](https://github.com/aivrar/portable-linux-in-a-box/wiki) ![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue) ![Language: C](https://img.shields.io/badge/Language-C11-blue)
 
-**Run Linux apps on Windows with one double-click. Package them for anyone. No Docker, no VMs, no Linux knowledge.**
+**Run Linux apps on Windows with one double-click. Package them for anyone. No Docker, no VM management, no Linux knowledge.**
 
-A single 224 KB executable that auto-detects the best Linux backend (WSL2, QEMU, WHPX, TinyEMU), provides a full development workbench, and lets you create standalone Windows apps that use Linux under the hood — zero configuration, zero coding required. Works on macOS and Linux too.
+A single ~252 KB executable that auto-detects the best Linux backend (WSL2, QEMU, WHPX, TinyEMU), provides a full development workbench, and lets you create standalone Windows apps that use Linux under the hood — zero configuration, zero coding required. Works on macOS and Linux too.
 
 ![Template Terminal](terminal.PNG)
 
@@ -25,14 +25,16 @@ Getting a Linux application running on a Windows user's machine typically means:
 ## Highlights
 
 - **One exe, two modes** — Without `app.json`: full developer workbench. With `app.json`: single-purpose app. Same binary.
-- **5 Linux backends** — WSL2, WHPX (Hyper-V VM), QEMU (SSH), TinyEMU (RISC-V emulation), Native. Auto-detected. Always works.
+- **5 Linux backends** — WSL2, WHPX (Hyper-V VM), QEMU (SSH), TinyEMU (RISC-V emulation), Native. The best available backend is auto-detected.
 - **Zero-code app creation** — Fill in a form, get a distributable folder. 16 pre-configured templates (ComfyUI, vLLM, Ollama, llama.cpp, Flask, Express, PostgreSQL, Jupyter, and more).
 - **CLI everywhere** — Every app works with `--cli` or auto-falls back to terminal mode when no GUI is available. Runs on Linux and macOS without WebView2.
-- **~224 KB exe** — No runtime, no framework, no garbage. Pure C compiled to a single binary.
+- **~252 KB exe** — No application framework or language runtime. Pure C compiled to a single binary.
 
 ---
 
 ## Quick Start
+
+Download the ZIP from the [latest release](https://github.com/aivrar/portable-linux-in-a-box/releases/latest), extract it, and keep its files together. The complete documentation is in the [project wiki](https://github.com/aivrar/portable-linux-in-a-box/wiki).
 
 ### 1. Install WSL (one time)
 
@@ -98,15 +100,16 @@ Every exe — template and apps — ships the same compiled code:
 ```
 TEMPLATE (what you run)              APP (what you distribute)
 +---------------------------+        +---------------------------+
-| linux_template.exe        |        | MyApp/                    |
-| webview.dll               | -----> |   MyApp.exe   (copy)      |
-| linux/bzImage             | Create |   app.json    (generated) |
-| linux/initramfs.cpio.gz   |  App   |   webview.dll (copy)      |
-| linux/bbl64.bin           |        |   linux/bzImage           |
-| linux/rootfs-riscv64.ext2 |        |   linux/initramfs.cpio.gz |
-+---------------------------+        |   linux/bbl64.bin         |
+| linux_template.exe        |        | MyApp/                     |
+| webview.dll               | -----> |   MyApp.exe   (copy)       |
+| linux/ubuntu-base.tar.gz  | Create |   app.json    (generated)  |
+| linux/bzImage             |  App   |   webview.dll (copy)       |
+| linux/initramfs.cpio.gz   |        |   linux/ubuntu-base.tar.gz |
+| linux/bbl64.bin           |        |   linux/bzImage            |
+| linux/rootfs-riscv64.ext2 |        |   linux/initramfs.cpio.gz  |
++---------------------------+        |   linux/bbl64.bin          |
                                      |   linux/rootfs-riscv64.ext2|
-                                     +---------------------------+
+                                     +----------------------------+
 ```
 
 The app folder is **completely self-contained**. No references back to the template. Move it anywhere, rename it, put it on a USB stick.
@@ -138,7 +141,7 @@ One-click installation of development tools and AI frameworks.
 | **Node.js + npm** | JavaScript runtime + package manager |
 | **vLLM (AI)** | GPU-accelerated LLM inference server |
 | **llama.cpp** | CPU/GPU AI model server + TinyLlama test model |
-| **Update All** | Updates all installed packages across all languages |
+| **Refresh Package Metadata** | Refreshes apt/apk package indexes and clears the apt cache |
 
 Each button runs a provisioning recipe that checks whether the tool is already installed and skips if so. Custom command input at the bottom for anything else.
 
@@ -149,7 +152,7 @@ Read, write, and inspect files inside the Linux filesystem.
 ![Files](files.PNG)
 
 - **Read**: enter a Linux path (e.g., `/etc/os-release`), see contents
-- **Write**: enter a path + content, writes via heredoc
+- **Write**: enter a path + content; content is transferred with base64-safe encoding
 - **Exists?**: check if a path exists
 
 ### HTTP
@@ -181,7 +184,11 @@ Package a standalone Windows application. 16 pre-configured templates:
 | **Databases** | PostgreSQL, Redis |
 | **Tools** | Jupyter Notebook, Code Server (VS Code in browser) |
 
-Or fill in your own: app name, git repo, setup command, start command, port, dependencies. Click **Create & Package App** to generate the folder. Click **Install & Preview** to test it live.
+Or fill in your own: app name, git repo, setup command, start command, ports, and dependencies. The **Child Port Assignments** panel inventories every existing child `app.json`, displays both its app and bridge ports, warns about conflicts, and offers a collision-free **Use Next Free** pair. Changing the app port also updates a matching port in the start command. Click **Create & Package App** to generate the folder. Click **Install & Preview** to test it live.
+
+Each child reserves two localhost assignments: the application port and a control bridge port. New children store both explicitly. Generic children without a `bridge.py` run their configured server directly on the app port; custom bridge-based children use the bridge port. The native packager rechecks all assignments immediately before writing the child, so a stale form cannot silently create a collision.
+
+Custom bridge apps may include `bridge.py` beside the exe. If `bridge_watchdog.py` is also present, the launcher uses it for supervised restarts and passes a per-launch authentication token. Older bridge apps without a watchdog remain supported.
 
 ---
 
@@ -208,30 +215,36 @@ The file that transforms the generic exe into a specific app:
 ```json
 {
     "name": "ComfyUI",
+    "title": "ComfyUI Desktop",
     "distro": "Ubuntu",
     "repo": "https://github.com/comfyanonymous/ComfyUI",
     "deps": "python, git",
     "setup": "pip install -r requirements.txt",
     "start": "python3 main.py --port 8188",
     "port": 8188,
+    "bridge_port": 9188,
     "width": 1200,
     "height": 800,
-    "terminal": true
+    "terminal": true,
+    "snapshot": true
 }
 ```
 
 | Field | Required | Default | Description |
 |-------|:--------:|---------|-------------|
-| name | No | "Linux App" | Window title |
-| distro | No | "Ubuntu" | WSL distribution name |
+| name | No | "Linux App" | Short app identifier; also determines the per-app WSL distro name |
+| title | No | `name` | Optional display title independent of the distro identity |
+| distro | No | — | Legacy metadata. Current Windows app mode creates an isolated `linbox-<name>` WSL distro. |
 | repo | No | — | Git repo URL, cloned to `/opt/app` on first run |
 | deps | No | — | Comma-separated: `python`, `node`, `git`, `base`, or any apt package |
 | setup | No | — | Shell command run after deps and clone |
 | start | No | — | Shell command to start the server |
 | port | No | 7860 | Port the server listens on |
+| bridge_port | No | `port + 1000` | Port reserved for an optional child control/UI bridge; keep it unique across children |
 | width | No | 1100 | Window width in pixels |
 | height | No | 750 | Window height in pixels |
 | terminal | No | false | Show a terminal button for end users |
+| snapshot | No | true | Export a reusable `linux/rootfs.tar.gz` after setup; set false to skip large snapshots |
 
 You can create or edit `app.json` by hand with any text editor. No need to use the template GUI.
 
@@ -247,6 +260,7 @@ MyApp/
   app.json               <-- Your app's configuration
   webview.dll            <-- WebView2 interop library
   linux/
+    ubuntu-base.tar.gz   <-- Minimal per-app WSL bootstrap filesystem
     bzImage              <-- x86_64 Linux kernel
     initramfs.cpio.gz    <-- Root filesystem
     bbl64.bin            <-- RISC-V kernel (TinyEMU fallback)
@@ -363,7 +377,7 @@ template/
       json_escape.h                 JSON string escaping
     gui/
       gui.h                         GUI entry point
-      webview_gui.c                 WebView2 GUI — embedded HTML + 11 JS bindings
+      webview_gui.c                 WebView2 GUI — embedded HTML + 12 JS bindings
   linux/
     out/bzImage                     Pre-built x86_64 Linux kernel (10.9 MB)
     out/initramfs.cpio.gz           Pre-built initramfs (3.5 MB)
@@ -437,12 +451,14 @@ b->destroy(b);
 | Problem | Solution |
 |---------|----------|
 | "Setup Required" screen | WSL not installed. Run `wsl --install` in admin PowerShell, restart. |
+| "Linux Environment Could Not Start" screen | WSL was detected but its session failed. The app retries quick cold-start failures once. If it repeats, run `wsl --shutdown`, reopen the app, and use `wsl --update` if required. |
 | "WebView2 not available" | Missing Edge or WebView2 runtime. App auto-falls back to CLI. |
-| "Distribution not registered" | Wrong distro name. Run `wsl --install -d Ubuntu`. |
+| "Distribution not registered" | For template CLI use, verify `--distro` with `wsl --list --quiet`. Packaged apps create their own `linbox-<name>` distro from the bundled rootfs. |
 | "Server did not start in time" | Check the log. Common: wrong port, missing deps, typo in start command. |
 | Setup tab install fails | Run `sudo apt-get update` in terminal first. |
-| Console window flashes on first launch | Normal — WSL VM is booting. Goes away after first launch per session. |
-| App hangs on "Waiting for server..." | The start command is wrong or the port doesn't match. |
+| Console window flashes on first launch | Current Windows builds start `wsl.exe` with no visible console. Rebuild the child from the latest parent template if an older package still flashes. |
+| App hangs while starting its UI | Check **Show Log**. For a generic child, verify `start` listens on `port`. For a custom bridge child, verify `bridge.py` listens on `bridge_port`. |
+| Child reports a port conflict | Pick **Use Next Free** in Create App, or assign unique `port` and `bridge_port` values in `app.json`. |
 | macOS: "QEMU not found" | Install with `brew install qemu`. |
 
 ---
@@ -474,7 +490,7 @@ This project builds on the work of:
 | Create an app for distribution | Create App tab > fill form > Create & Package |
 | Create an empty shell app | Create App tab > just enter a name > Create & Package |
 | Load a template config | Create App tab > dropdown > select template |
-| Update all tools | Setup tab > "Update All" |
+| Refresh Linux package indexes | Setup tab > "Refresh Package Metadata" |
 | Test an API endpoint | HTTP tab > URL > GET or POST |
 | Read/write a Linux file | Files tab > path > Read or Write |
 | Switch WSL distro | Header dropdown |

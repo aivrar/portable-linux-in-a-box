@@ -12,6 +12,8 @@
 #include <windows.h>
 #endif
 
+static char *base64_encode(const unsigned char *data, size_t len, size_t *out_len);
+
 char *fs_win_to_linux(linux_backend_t *backend, const char *win_path) {
     if (!win_path) return NULL;
     (void)backend;
@@ -92,21 +94,23 @@ linux_error_t fs_write_file(linux_backend_t *backend,
     if (!backend || !linux_path || !content)
         return LINUX_ERR_INVALID_ARG;
 
-    /* Use heredoc to avoid escaping issues */
+    /* Use base64 encoding to avoid heredoc injection issues —
+     * content is arbitrary and could contain any delimiter string. */
     char *esc_path = shell_escape(linux_path);
     if (!esc_path) return LINUX_ERR_OUT_OF_MEMORY;
-    size_t cmd_len = strlen(esc_path) + strlen(content) + 64;
+    size_t content_len = strlen(content);
+    size_t b64_len;
+    char *b64 = base64_encode((const unsigned char *)content, content_len, &b64_len);
+    if (!b64) { free(esc_path); return LINUX_ERR_OUT_OF_MEMORY; }
+    size_t cmd_len = strlen(esc_path) + b64_len + 64;
     char *cmd = (char *)malloc(cmd_len);
-    if (!cmd) { free(esc_path); return LINUX_ERR_OUT_OF_MEMORY; }
+    if (!cmd) { free(esc_path); free(b64); return LINUX_ERR_OUT_OF_MEMORY; }
 
-    /* Trailing newline after EOF marker is critical: the WSL persistent shell
-     * wraps commands as (cmd) 2>&1; echo "marker". Without the trailing \n,
-     * the ) lands on the same line as LINUX_TEMPLATE_EOF and the heredoc
-     * never terminates, hanging the shell. */
     snprintf(cmd, cmd_len,
-             "cat > %s << 'LINUX_TEMPLATE_EOF'\n%s\nLINUX_TEMPLATE_EOF\n",
-             esc_path, content);
+             "printf '%%s' '%s' | base64 -d > %s",
+             b64, esc_path);
     free(esc_path);
+    free(b64);
 
     int exit_code = -1;
     linux_error_t rc = backend->exec(backend, cmd, NULL, NULL, &exit_code);

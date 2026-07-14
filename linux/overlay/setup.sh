@@ -9,7 +9,7 @@
 #   ./setup.sh vllm         — install vLLM (requires GPU for inference)
 #   ./setup.sh llamacpp     — build llama.cpp + download small model
 #   ./setup.sh all          — install everything
-#   ./setup.sh update       — update all installed packages + tools
+#   ./setup.sh update       — refresh package metadata only
 
 set -e
 
@@ -61,56 +61,15 @@ install_vllm() {
 }
 
 update_all() {
-    echo "=== Updating system packages ==="
+    echo "=== Refreshing package metadata ==="
     if command -v apk >/dev/null 2>&1; then
-        apk update && apk upgrade
+        apk update
     elif command -v apt-get >/dev/null 2>&1; then
-        apt-get update -y -qq && apt-get upgrade -y -qq
-        apt-get autoremove -y -qq && apt-get clean
+        apt-get update -y -qq
+        apt-get clean
     fi
 
-    if command -v pip3 >/dev/null 2>&1; then
-        echo "=== Updating Python packages (pip) ==="
-        pip3 list --outdated --format=columns 2>/dev/null | tail -n +3 | awk '{print $1}' | xargs -r pip3 install --upgrade 2>/dev/null || true
-        if [ -d ~/vllm-env ]; then
-            echo "=== Updating vLLM ==="
-            ~/vllm-env/bin/pip install --upgrade vllm 2>/dev/null || true
-        fi
-    fi
-
-    if command -v npm >/dev/null 2>&1; then
-        echo "=== Updating Node.js packages (npm) ==="
-        npm update -g 2>/dev/null || true
-    fi
-
-    if command -v rustup >/dev/null 2>&1; then
-        echo "=== Updating Rust toolchain ==="
-        rustup update 2>/dev/null || true
-    fi
-
-    if command -v go >/dev/null 2>&1; then
-        echo "=== Updating Go ==="
-        go get -u all 2>/dev/null || true
-    fi
-
-    if command -v gem >/dev/null 2>&1; then
-        echo "=== Updating Ruby gems ==="
-        gem update 2>/dev/null || true
-    fi
-
-    if [ -d ~/llama.cpp/.git ]; then
-        echo "=== Updating llama.cpp ==="
-        cd ~/llama.cpp && git pull
-        cmake --build build --config Release -j$(nproc) 2>/dev/null || true
-    fi
-
-    if command -v docker >/dev/null 2>&1; then
-        echo "=== Pulling latest Docker images ==="
-        docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -v '<none>' | xargs -r -I{} docker pull {} 2>/dev/null || true
-        docker system prune -f 2>/dev/null || true
-    fi
-
-    echo "All updates complete."
+    echo "Package metadata refreshed. Toolchain upgrades are app-specific and must be explicit."
 }
 
 case "${1:-base}" in

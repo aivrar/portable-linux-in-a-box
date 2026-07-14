@@ -77,7 +77,7 @@ endif()
 if(WIN32)
     target_compile_definitions(linux_core PUBLIC
         UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
-    target_link_libraries(linux_core PUBLIC winhttp ws2_32)
+    target_link_libraries(linux_core PUBLIC winhttp ws2_32 dwmapi)
 elseif(APPLE)
     target_compile_options(linux_core PUBLIC -Wall -Wextra)
     find_library(COCOA_FRAMEWORK Cocoa)

@@ -15,6 +15,7 @@
 static inline char *json_escape(const char *s) {
     if (!s) return strdup("");
     size_t len = strlen(s);
+    if (len > SIZE_MAX / 6) return NULL;
     char *out = (char *)malloc(len * 6 + 1);
     if (!out) return strdup("");
     char *p = out;

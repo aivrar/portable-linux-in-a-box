@@ -154,46 +154,15 @@ provision_recipe_t provision_recipe_llamacpp(void) {
 }
 
 static provision_step_t update_steps[] = {
-    { "Updating system packages (apt/apk)",
-      "sudo apt-get update -y -qq 2>/dev/null && sudo apt-get upgrade -y -qq 2>/dev/null || "
-      "sudo apk update 2>/dev/null && sudo apk upgrade 2>/dev/null || true",
+    { "Refreshing package metadata",
+      "sudo apt-get update -y -qq 2>/dev/null || sudo apk update 2>/dev/null || true",
       NULL },
-    { "Upgrading Python packages (pip)",
-      "pip3 list --outdated --format=columns 2>/dev/null | tail -n +3 | "
-      "awk '{print $1}' | xargs -r pip3 install --upgrade 2>/dev/null; "
-      "test -d ~/vllm-env && ~/vllm-env/bin/pip install --upgrade vllm 2>/dev/null; "
-      "echo done",
-      "which pip3" },
-    { "Upgrading Node.js packages (npm)",
-      "npm update -g 2>/dev/null; echo done",
-      "which npm" },
-    { "Upgrading Rust toolchain (rustup)",
-      "rustup update 2>/dev/null; "
-      "cargo install-update -a 2>/dev/null || echo 'cargo-update not installed, skipping crate updates'; "
-      "echo done",
-      "which rustup" },
-    { "Upgrading Go packages",
-      "go install golang.org/dl/gotip@latest 2>/dev/null; "
-      "go get -u all 2>/dev/null || true; echo done",
-      "which go" },
-    { "Upgrading Ruby gems",
-      "gem update --system 2>/dev/null; gem update 2>/dev/null; echo done",
-      "which gem" },
-    { "Updating llama.cpp",
-      "cd ~/llama.cpp && git pull && "
-      "cmake --build build --config Release -j$(nproc) 2>/dev/null; echo done",
-      "test -d ~/llama.cpp/.git" },
-    { "Pulling latest Docker images",
-      "docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | "
-      "grep -v '<none>' | xargs -r -I{} docker pull {} 2>/dev/null; echo done",
-      "which docker" },
-    { "Cleaning up",
-      "sudo apt-get autoremove -y -qq 2>/dev/null; sudo apt-get clean 2>/dev/null; "
-      "docker system prune -f 2>/dev/null; echo done",
+    { "Cleaning package cache",
+      "sudo apt-get clean 2>/dev/null || true",
       NULL },
 };
 
 provision_recipe_t provision_recipe_update(void) {
-    provision_recipe_t r = { "Update All", update_steps, 9 };
+    provision_recipe_t r = { "Refresh Package Metadata", update_steps, 2 };
     return r;
 }
