@@ -1,6 +1,6 @@
 # Portable Linux in a Box
 
-![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue) ![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2011+-lightgrey) ![Platform: Linux](https://img.shields.io/badge/Platform-Linux-orange) ![Language: C](https://img.shields.io/badge/Language-C11-blue)
+[![Latest Release](https://img.shields.io/github/v/release/aivrar/portable-linux-in-a-box)](https://github.com/aivrar/portable-linux-in-a-box/releases/latest) [![Downloads](https://img.shields.io/github/downloads/aivrar/portable-linux-in-a-box/total)](https://github.com/aivrar/portable-linux-in-a-box/releases) [![Documentation](https://img.shields.io/badge/docs-wiki-blue)](https://github.com/aivrar/portable-linux-in-a-box/wiki) ![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue) ![Language: C](https://img.shields.io/badge/Language-C11-blue)
 
 **Run Linux apps on Windows with one double-click. Package them for anyone. No Docker, no VM management, no Linux knowledge.**
 
@@ -33,6 +33,8 @@ Getting a Linux application running on a Windows user's machine typically means:
 ---
 
 ## Quick Start
+
+Download the ZIP from the [latest release](https://github.com/aivrar/portable-linux-in-a-box/releases/latest), extract it, and keep its files together. The complete documentation is in the [project wiki](https://github.com/aivrar/portable-linux-in-a-box/wiki).
 
 ### 1. Install WSL (one time)
 
