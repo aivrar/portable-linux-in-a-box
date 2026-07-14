@@ -20,6 +20,7 @@
 static inline char *shell_escape(const char *s) {
     if (!s) return NULL;
     size_t len = strlen(s);
+    if (len > (SIZE_MAX - 3) / 4) return NULL;
     /* Worst case: every char is a single quote -> 4x expansion + 2 outer quotes + NUL */
     char *out = (char *)malloc(len * 4 + 3);
     if (!out) return NULL;

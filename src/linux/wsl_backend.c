@@ -18,6 +18,7 @@
 #include "backend.h"
 #include <stdio.h>
 #include <stdarg.h>
+#include <string.h>
 
 /* --------------------------------------------------------------------------
  * WSL API typedefs
@@ -172,14 +173,14 @@ static int shell_launch(wsl_state_t *state) {
     DWORD written;
     WriteFile(stdin_write, probe, (DWORD)strlen(probe), &written, NULL);
 
-    /* Read until __SHELL_READY__ appears (timeout 30s).
-     * Cold WSL boots (after wsl --shutdown or first launch) can take 15-20s. */
+    /* Read until __SHELL_READY__ appears (timeout 2 min).
+     * Cold WSL boots, first launches, or high system load can take 15-60s. */
     growbuf_t buf;
     growbuf_init(&buf, 1024);
-    DWORD start = GetTickCount();
+    ULONGLONG start = GetTickCount64();
     int ready = 0;
 
-    while ((GetTickCount() - start) < 30000 && !ready) {
+    while ((GetTickCount64() - start) < 120000 && !ready) {
         char tmp[READ_BUF_SIZE];
         int n = pipe_read_available(stdout_read, tmp, sizeof(tmp) - 1);
         if (n > 0) {
@@ -190,14 +191,28 @@ static int shell_launch(wsl_state_t *state) {
         } else if (n < 0) {
             break; /* pipe error */
         } else {
+            DWORD process_exit = STILL_ACTIVE;
+            if (GetExitCodeProcess(process, &process_exit) &&
+                process_exit != STILL_ACTIVE)
+                break;
             Sleep(50);
         }
     }
-    growbuf_free(&buf);
 
     if (!ready) {
-        wsl_set_error(state, "Shell did not respond within 30 seconds");
-        TerminateProcess(process, 1);
+        DWORD process_exit = STILL_ACTIVE;
+        GetExitCodeProcess(process, &process_exit);
+        if (process_exit != STILL_ACTIVE) {
+            const char *detail = (buf.data && buf.data[0]) ? buf.data :
+                                 "no diagnostic output";
+            wsl_set_error(state,
+                "wsl.exe exited during startup (exit %lu): %.320s",
+                (unsigned long)process_exit, detail);
+        } else {
+            wsl_set_error(state, "WSL shell did not respond within 120 seconds");
+            TerminateProcess(process, 1);
+        }
+        growbuf_free(&buf);
         CloseHandle(process);
         CloseHandle(stdin_write);
         CloseHandle(stdout_read);
@@ -206,6 +221,8 @@ static int shell_launch(wsl_state_t *state) {
         state->shell_stdout_read = INVALID_HANDLE_VALUE;
         return -1;
     }
+
+    growbuf_free(&buf);
 
     state->shell_alive = 1;
     return 0;
@@ -221,6 +238,26 @@ static void shell_close(wsl_state_t *state) {
         if (WaitForSingleObject(state->shell_process, 2000) == WAIT_TIMEOUT)
             TerminateProcess(state->shell_process, 1);
         state->shell_alive = 0;
+    }
+    if (state->shell_stdin_write != INVALID_HANDLE_VALUE) {
+        CloseHandle(state->shell_stdin_write);
+        state->shell_stdin_write = INVALID_HANDLE_VALUE;
+    }
+    if (state->shell_stdout_read != INVALID_HANDLE_VALUE) {
+        CloseHandle(state->shell_stdout_read);
+        state->shell_stdout_read = INVALID_HANDLE_VALUE;
+    }
+    if (state->shell_process) {
+        CloseHandle(state->shell_process);
+        state->shell_process = NULL;
+    }
+}
+
+static void shell_force_close(wsl_state_t *state) {
+    state->shell_alive = 0;
+    if (state->shell_process) {
+        TerminateProcess(state->shell_process, 1);
+        WaitForSingleObject(state->shell_process, 2000);
     }
     if (state->shell_stdin_write != INVALID_HANDLE_VALUE) {
         CloseHandle(state->shell_stdin_write);
@@ -310,7 +347,7 @@ static linux_error_t wsl_start(linux_backend_t *self,
                 BOOL ok = CreateProcessA(NULL, import_cmd, NULL, NULL, FALSE,
                                          CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
                 if (ok) {
-                    WaitForSingleObject(pi.hProcess, 120000);
+                    WaitForSingleObject(pi.hProcess, 600000); /* 10 min for large rootfs */
                     DWORD exit_code = 1;
                     GetExitCodeProcess(pi.hProcess, &exit_code);
                     CloseHandle(pi.hThread);
@@ -347,8 +384,39 @@ static linux_error_t wsl_start(linux_backend_t *self,
 
     /* Launch persistent shell */
     LINUX_LOG(config, "WSL2: launching persistent shell");
+    ULONGLONG launch_started = GetTickCount64();
     if (shell_launch(state) != 0) {
-        return LINUX_ERR_START_FAILED;
+        ULONGLONG elapsed = GetTickCount64() - launch_started;
+        char first_error[sizeof(state->last_error_buf)];
+        snprintf(first_error, sizeof(first_error), "%s", state->last_error_buf);
+
+        /* A stopped WSL VM can occasionally make the first wsl.exe process
+         * exit while the host service is still coming online. That failure is
+         * quick; retry it once instead of incorrectly telling the user to
+         * install WSL. Do not double a genuine 120-second timeout. */
+        if (elapsed < 30000) {
+            LINUX_LOG(config,
+                "WSL2: first shell launch failed quickly; retrying once: %s",
+                first_error);
+            Sleep(750);
+            if (shell_launch(state) == 0) {
+                LINUX_LOG(config, "WSL2: shell launch recovered on retry");
+            } else {
+                char second_error[sizeof(state->last_error_buf)];
+                snprintf(second_error, sizeof(second_error), "%s",
+                         state->last_error_buf);
+                wsl_set_error(state,
+                    "WSL startup failed twice. First: %.190s; Retry: %.190s",
+                    first_error, second_error);
+                LINUX_LOG(config,
+                    "WSL2: shell retry failed; leaving WSL host untouched");
+                return LINUX_ERR_START_FAILED;
+            }
+        } else {
+            LINUX_LOG(config,
+                "WSL2: shell launch timed out; leaving WSL host untouched");
+            return LINUX_ERR_START_FAILED;
+        }
     }
 
     LINUX_LOG(config, "WSL2: persistent shell ready for '%s'", name);
@@ -413,8 +481,13 @@ static linux_error_t wsl_exec(linux_backend_t *self,
 
     /* Write command to shell stdin */
     DWORD written;
+    DWORD wrapped_len = (DWORD)strlen(wrapped);
     BOOL ok = WriteFile(state->shell_stdin_write, wrapped,
-                        (DWORD)strlen(wrapped), &written, NULL);
+                        wrapped_len, &written, NULL);
+    if (ok && written != wrapped_len) {
+        LINUX_LOG(state->config, "WSL2: partial write to shell stdin (%lu of %lu bytes)",
+                  (unsigned long)written, (unsigned long)wrapped_len);
+    }
     free(wrapped);
 
     if (!ok) {
@@ -430,18 +503,19 @@ static linux_error_t wsl_exec(linux_backend_t *self,
     char read_buf[READ_BUF_SIZE];
     int found_start = 0, found_end = 0;
     int cmd_exit_code = -1;
-    DWORD timeout = state->config->timeout_ms ? state->config->timeout_ms
-                                              : DEFAULT_TIMEOUT_MS;
-    DWORD start_time = GetTickCount();
+    ULONGLONG timeout = state->config->timeout_ms ? state->config->timeout_ms
+                                                  : DEFAULT_TIMEOUT_MS;
+    ULONGLONG start_time = GetTickCount64();
 
     while (!found_end) {
         /* Check timeout */
-        if ((GetTickCount() - start_time) > timeout) {
+        if ((GetTickCount64() - start_time) > timeout) {
             /* Send Ctrl+C to interrupt the running command */
             char ctrlc = '\x03';
             WriteFile(state->shell_stdin_write, &ctrlc, 1, &written, NULL);
+            shell_force_close(state);
             result = LINUX_ERR_TIMEOUT;
-            wsl_set_error(state, "Command timed out after %lu ms", timeout);
+            wsl_set_error(state, "Command timed out after %llu ms", (unsigned long long)timeout);
             break;
         }
 
@@ -515,20 +589,8 @@ static linux_error_t wsl_stop(linux_backend_t *self) {
     shell_close(state);
     state->running = 0;
 
-    /* Terminate the WSL distro so vmmem releases system memory.
-     * Without this, the distro stays running in the background. */
-    if (state->distro_name[0]) {
-        wchar_t cmd[512];
-        _snwprintf(cmd, 512, L"wsl.exe --terminate %ls", state->distro_name);
-        STARTUPINFOW si = { sizeof(si) };
-        PROCESS_INFORMATION pi = {0};
-        if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE,
-                           CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-            WaitForSingleObject(pi.hProcess, 5000);
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-        }
-    }
+    if (state->distro_name[0])
+        LINUX_LOG(state->config, "WSL2: leaving distro running on stop");
     return LINUX_OK;
 }
 
